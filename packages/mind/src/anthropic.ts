@@ -46,23 +46,32 @@ function mapContentBlock(block: ContentBlock): Anthropic.Messages.ContentBlockPa
 }
 
 /**
+ * Flatten a ContentBlock[] to a single string by joining text blocks.
+ */
+function flattenContent(blocks: ContentBlock[]): string {
+  return blocks
+    .filter((b) => b.type === 'text' && b.text)
+    .map((b) => b.text!)
+    .join('\n');
+}
+
+/**
  * Map our Message[] to Anthropic's format.
  * Extracts system messages into a separate system prompt string.
+ * Multiple system messages are concatenated with double newlines.
  * Returns { system, messages }.
  */
 function mapMessages(messages: Message[]): {
   system: string | undefined;
   messages: Anthropic.Messages.MessageParam[];
 } {
-  let system: string | undefined;
+  const systemMessages: string[] = [];
   const mapped: Anthropic.Messages.MessageParam[] = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
-      // Extract system prompt from the first system message
-      if (system === undefined) {
-        system = typeof msg.content === 'string' ? msg.content : '';
-      }
+      const text = typeof msg.content === 'string' ? msg.content : flattenContent(msg.content);
+      systemMessages.push(text);
       continue;
     }
 
@@ -75,6 +84,8 @@ function mapMessages(messages: Message[]): {
       });
     }
   }
+
+  const system = systemMessages.length > 0 ? systemMessages.join('\n\n') : undefined;
 
   return { system, messages: mapped };
 }

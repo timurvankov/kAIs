@@ -120,6 +120,78 @@ describe('OllamaMind', () => {
       >;
       expect(body['options']).toEqual({ temperature: 0.3 });
     });
+
+    it('passes maxTokens as num_predict in options', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          model: 'llama3.2',
+          message: { role: 'assistant', content: 'ok' },
+          done: true,
+          prompt_eval_count: 10,
+          eval_count: 5,
+        }),
+      });
+
+      await mind.think({
+        messages: [{ role: 'user', content: 'hi' }],
+        maxTokens: 512,
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body['options']).toEqual({ num_predict: 512 });
+    });
+
+    it('passes both temperature and maxTokens in options', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          model: 'llama3.2',
+          message: { role: 'assistant', content: 'ok' },
+          done: true,
+          prompt_eval_count: 10,
+          eval_count: 5,
+        }),
+      });
+
+      await mind.think({
+        messages: [{ role: 'user', content: 'hi' }],
+        temperature: 0.5,
+        maxTokens: 1024,
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body['options']).toEqual({ temperature: 0.5, num_predict: 1024 });
+    });
+
+    it('omits options when neither temperature nor maxTokens provided', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          model: 'llama3.2',
+          message: { role: 'assistant', content: 'ok' },
+          done: true,
+          prompt_eval_count: 10,
+          eval_count: 5,
+        }),
+      });
+
+      await mind.think({
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as Record<
+        string,
+        unknown
+      >;
+      expect(body['options']).toBeUndefined();
+    });
   });
 
   describe('response parsing', () => {
@@ -246,31 +318,32 @@ describe('OllamaMind', () => {
   });
 
   describe('default base URL', () => {
-    it('uses OLLAMA_URL env var when not provided', () => {
+    it('uses OLLAMA_URL env var when not provided', async () => {
       const original = process.env['OLLAMA_URL'];
       process.env['OLLAMA_URL'] = 'http://custom:1234';
 
-      const m = new OllamaMind('llama3.2');
-      // We can't directly access private baseUrl, but we can test via fetch call
-      fetchMock.mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          model: 'llama3.2',
-          message: { role: 'assistant', content: 'hi' },
-          done: true,
-        }),
-      });
+      try {
+        const m = new OllamaMind('llama3.2');
+        // We can't directly access private baseUrl, but we can test via fetch call
+        fetchMock.mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            model: 'llama3.2',
+            message: { role: 'assistant', content: 'hi' },
+            done: true,
+          }),
+        });
 
-      void m.think({ messages: [{ role: 'user', content: 'hi' }] }).then(() => {
+        await m.think({ messages: [{ role: 'user', content: 'hi' }] });
         const [url] = fetchMock.mock.calls[0] as [string];
         expect(url).toBe('http://custom:1234/api/chat');
-      });
-
-      // Restore
-      if (original !== undefined) {
-        process.env['OLLAMA_URL'] = original;
-      } else {
-        delete process.env['OLLAMA_URL'];
+      } finally {
+        // Restore
+        if (original !== undefined) {
+          process.env['OLLAMA_URL'] = original;
+        } else {
+          delete process.env['OLLAMA_URL'];
+        }
       }
     });
   });

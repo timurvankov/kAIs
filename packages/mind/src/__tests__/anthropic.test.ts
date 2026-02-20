@@ -135,6 +135,53 @@ describe('AnthropicMind', () => {
       expect(callArgs['messages']).toEqual([{ role: 'user', content: 'Hello' }]);
     });
 
+    it('concatenates multiple system messages', async () => {
+      createMock.mockResolvedValue({
+        content: [{ type: 'text', text: 'response' }],
+        model: 'claude-sonnet-4-20250514',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+
+      await mind.think({
+        messages: [
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'system', content: 'Be concise.' },
+          { role: 'user', content: 'Hello' },
+        ],
+      });
+
+      const callArgs = createMock.mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArgs['system']).toBe('You are helpful.\n\nBe concise.');
+      expect(callArgs['messages']).toEqual([{ role: 'user', content: 'Hello' }]);
+    });
+
+    it('handles system message with ContentBlock[] content', async () => {
+      createMock.mockResolvedValue({
+        content: [{ type: 'text', text: 'response' }],
+        model: 'claude-sonnet-4-20250514',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
+
+      await mind.think({
+        messages: [
+          {
+            role: 'system',
+            content: [
+              { type: 'text', text: 'You are helpful.' },
+              { type: 'text', text: 'Be concise.' },
+            ],
+          },
+          { role: 'user', content: 'Hello' },
+        ],
+      });
+
+      const callArgs = createMock.mock.calls[0]![0] as Record<string, unknown>;
+      expect(callArgs['system']).toBe('You are helpful.\nBe concise.');
+      expect(callArgs['messages']).toEqual([{ role: 'user', content: 'Hello' }]);
+    });
+
     it('maps user and assistant messages correctly', async () => {
       createMock.mockResolvedValue({
         content: [{ type: 'text', text: 'response' }],

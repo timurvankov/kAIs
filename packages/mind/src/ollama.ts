@@ -114,13 +114,15 @@ export class OllamaMind implements Mind {
   }
 
   async think(input: ThinkInput): Promise<ThinkOutput> {
+    const options: Record<string, unknown> = {};
+    if (input.temperature !== undefined) options['temperature'] = input.temperature;
+    if (input.maxTokens !== undefined) options['num_predict'] = input.maxTokens;
+
     const body: Record<string, unknown> = {
       model: this.model,
       messages: mapMessages(input.messages),
       stream: false,
-      ...(input.temperature !== undefined && {
-        options: { temperature: input.temperature },
-      }),
+      ...(Object.keys(options).length > 0 && { options }),
     };
 
     if (input.tools && input.tools.length > 0) {
