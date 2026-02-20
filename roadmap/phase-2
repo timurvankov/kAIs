@@ -1,0 +1,758 @@
+# kAIs — Phase 2: Formation + Mission + Topology
+
+**Goal:** Запускать группы Cell'ов как единое целое, давать им задачи с критериями завершения, контролировать кто с кем общается.
+
+**Depends on:** Phase 1 (Cell CRD, operator, cell-runtime, NATS, Postgres)
+
+**Duration estimate:** 1–2 weeks
+
+---
+
+## Что Phase 2 добавляет
+
+- `Formation` — декларативная группа Cell'ов (аналог Deployment)
+- `Mission` — задача с completion criteria (аналог Job)
+- `Topology` — граф коммуникаций (аналог NetworkPolicy)
+- Children в Cell — вложенные Cell'ы, экосистемы
+- `spawn_cell` tool — динамическое создание дочерних Cell'ов
+- Budget propagation — бюджет течёт от parent к children
+
+---
+
+## New CRDs
+
+### 2.1 — Formation CRD
+
+Formation описывает желаемое состояние группы. Оператор создаёт Cell CRDs, следит за их здоровьем, рестартит упавших.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Formation
+metadata:
+  name: code-review-team
+  namespace: project-x
+spec:
+  # Статически объявленные Cell'ы
+  cells:
+    - name: architect
+      replicas: 1
+      spec:
+        mind:
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          systemPrompt: |
+            You are a senior architect. You review designs,
+            break down tasks, and coordinate the team.
+          temperature: 0.3
+        tools:
+          - name: send_message
+          - name: spawn_cell
+          - name: read_file
+          - name: write_file
+
+    - name: developer
+      replicas: 2    # developer-0, developer-1
+      spec:
+        mind:
+          provider: ollama
+          model: qwen2.5:32b
+          systemPrompt: |
+            You are a developer. You implement code based on
+            specifications from the architect.
+        tools:
+          - name: send_message
+          - name: read_file
+          - name: write_file
+          - name: bash
+
+    - name: reviewer
+      replicas: 1
+      spec:
+        mind:
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          systemPrompt: |
+            You review code for correctness, style, and security.
+          temperature: 0.2
+        tools:
+          - name: send_message
+          - name: read_file
+
+  # Кто с кем может общаться
+  topology:
+    type: custom
+    routes:
+      - from: architect
+        to: [developer, reviewer]
+      - from: developer
+        to: [architect, reviewer]
+      - from: reviewer
+        to: [architect]
+    # developer'ы не общаются напрямую друг с другом — через architect
+
+  # Общий бюджет на всю Formation
+  budget:
+    maxTotalCost: 10.00
+    maxCostPerHour: 2.00
+    allocation:
+      architect: 40%     # координатор получает больше
+      developer: 20%     # каждый developer по 20%
+      reviewer: 20%
+
+  # Динамическое масштабирование (Phase 6, но schema готов)
+  # scaling:
+  #   minCells: 3
+  #   maxCells: 10
+  #   scaleOn: queueDepth
+
+status:
+  phase: Running           # Pending | Running | Paused | Completed | Failed
+  readyCells: 4
+  totalCells: 4
+  totalCost: 1.23
+  cells:
+    - name: architect-0
+      phase: Running
+      cost: 0.54
+    - name: developer-0
+      phase: Running
+      cost: 0.28
+    - name: developer-1
+      phase: Running
+      cost: 0.31
+    - name: reviewer-0
+      phase: Running
+      cost: 0.10
+```
+
+**Что делает Formation Controller в операторе:**
+
+```
+reconcileFormation(formation):
+  for each cellTemplate in formation.spec.cells:
+    for i in 0..cellTemplate.replicas:
+      cellName = "{template.name}-{i}"
+      cell = getCell(cellName, formation.namespace)
+      if !cell:
+        createCell(cellName, cellTemplate.spec, ownerRef=formation)
+      elif cell.spec != cellTemplate.spec:
+        updateCell(cellName, cellTemplate.spec)  # rolling update
+      elif cell.status.phase == "Failed":
+        deleteCell(cellName)  # next reconcile recreates
+
+  # Kill cells that shouldn't exist (scale down)
+  for each existingCell owned by formation:
+    if existingCell not in desired set:
+      deleteCell(existingCell)
+
+  # Budget check
+  if formation.totalCost >= formation.spec.budget.maxTotalCost:
+    pauseAllCells(formation)
+    formation.status.phase = "Paused"
+
+  # Update aggregate status
+  formation.status.readyCells = count(running cells)
+  formation.status.totalCost = sum(cell costs)
+```
+
+**Printer columns:**
+
+```bash
+$ kubectl get formations -n project-x
+NAME               STATUS    CELLS   READY   COST     AGE
+code-review-team   Running   4       4       $1.23    12m
+```
+
+### 2.2 — Mission CRD
+
+Mission = задача с определённым completion criteria. Привязывается к Formation (или отдельным Cell'ам). Аналог K8s Job — но с LLM-based evaluation.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Mission
+metadata:
+  name: implement-auth-module
+  namespace: project-x
+spec:
+  # Кто выполняет
+  formationRef: code-review-team
+  # Или напрямую:
+  # cellRef: architect-0
+
+  # Задача
+  objective: |
+    Implement JWT authentication module for the API server.
+    Requirements:
+    - Login endpoint (POST /auth/login)
+    - Token refresh endpoint (POST /auth/refresh)
+    - Middleware for protected routes
+    - Unit tests with >80% coverage
+    - TypeScript, using jose library
+
+  # Как определить завершение
+  completion:
+    # Автоматические проверки
+    checks:
+      - name: files-exist
+        type: fileExists
+        paths:
+          - src/auth/login.ts
+          - src/auth/refresh.ts
+          - src/auth/middleware.ts
+          - src/auth/__tests__/auth.test.ts
+
+      - name: tests-pass
+        type: command
+        command: npm test -- --coverage
+        successPattern: "All tests passed"
+        failPattern: "FAIL"
+
+      - name: coverage
+        type: command
+        command: npm test -- --coverage --json
+        jsonPath: $.coverageMap.total.lines.pct
+        operator: ">="
+        value: 80
+
+    # LLM-based review (оценка качества)
+    review:
+      enabled: true
+      reviewer: reviewer-0    # Cell из Formation
+      criteria: |
+        Review the implementation for:
+        1. Security best practices (no secrets in code, proper hashing)
+        2. Error handling completeness
+        3. Code organization and readability
+
+    # Максимум попыток
+    maxAttempts: 3
+
+    # Таймаут
+    timeout: 30m
+
+  # Как начать — сообщение координатору
+  entrypoint:
+    cell: architect-0
+    message: |
+      New mission: implement JWT auth module.
+      Full requirements attached. Coordinate with developers
+      and submit for review when ready.
+
+  # Бюджет миссии (отдельно от Formation бюджета)
+  budget:
+    maxCost: 5.00
+
+status:
+  phase: Running          # Pending | Running | Succeeded | Failed
+  attempt: 1
+  startedAt: "2026-02-20T14:00:00Z"
+  checks:
+    - name: files-exist
+      status: Passed
+    - name: tests-pass
+      status: Pending
+    - name: coverage
+      status: Pending
+  review:
+    status: Pending
+  cost: 2.34
+  history:
+    - attempt: 1
+      startedAt: "2026-02-20T14:00:00Z"
+      result: Running
+```
+
+**Mission Controller logic:**
+
+```
+reconcileMission(mission):
+  formation = getFormation(mission.spec.formationRef)
+
+  switch mission.status.phase:
+    case "Pending":
+      # Send objective to entrypoint cell
+      sendMessage(mission.spec.entrypoint.cell, mission.spec.entrypoint.message)
+      mission.status.phase = "Running"
+      mission.status.startedAt = now()
+
+    case "Running":
+      # Check timeout
+      if now() - mission.status.startedAt > mission.spec.completion.timeout:
+        if mission.status.attempt < mission.spec.completion.maxAttempts:
+          mission.status.attempt++
+          mission.status.phase = "Pending"  # retry
+        else:
+          mission.status.phase = "Failed"
+        return
+
+      # Check budget
+      if mission.status.cost >= mission.spec.budget.maxCost:
+        mission.status.phase = "Failed"
+        mission.status.message = "Budget exhausted"
+        return
+
+      # Run completion checks
+      allPassed = true
+      for check in mission.spec.completion.checks:
+        result = runCheck(check, formation.workspace)
+        mission.status.checks[check.name] = result
+        if result != "Passed":
+          allPassed = false
+
+      # If all checks pass → run review
+      if allPassed:
+        if mission.spec.completion.review.enabled:
+          if mission.status.review.status == "Pending":
+            requestReview(mission)
+          elif mission.status.review.status == "Approved":
+            mission.status.phase = "Succeeded"
+          elif mission.status.review.status == "Rejected":
+            # Send feedback, retry
+            if mission.status.attempt < maxAttempts:
+              sendFeedback(mission)
+              mission.status.attempt++
+            else:
+              mission.status.phase = "Failed"
+        else:
+          mission.status.phase = "Succeeded"
+
+    case "Succeeded":
+      # Emit event, optionally tear down Formation
+      emitEvent("MissionCompleted", mission)
+
+    case "Failed":
+      emitEvent("MissionFailed", mission)
+```
+
+**Printer columns:**
+
+```bash
+$ kubectl get missions -n project-x
+NAME                   STATUS     ATTEMPT   CHECKS   COST    AGE    TIMEOUT
+implement-auth-module  Running    1         1/3      $2.34   8m     30m
+```
+
+### 2.3 — Topology (embedded in Formation)
+
+Topology не отдельный CRD — это секция внутри Formation. Контролирует маршрутизацию сообщений через NATS.
+
+```yaml
+# Предустановленные типы
+topology:
+  type: full_mesh          # все видят всех
+
+topology:
+  type: hierarchy          # дерево, parent-child только
+  root: architect
+
+topology:
+  type: star               # hub-and-spoke
+  hub: coordinator
+
+topology:
+  type: ring               # каждый видит соседей
+
+topology:
+  type: stigmergy          # нет прямых сообщений, общий blackboard
+  blackboard:
+    decayMinutes: 30
+
+# Полный контроль
+topology:
+  type: custom
+  routes:
+    - from: architect
+      to: [developer, reviewer]
+      protocol: contract        # parent-child with deliverables
+    - from: developer
+      to: [architect]
+      protocol: report          # status updates only
+    - from: developer
+      to: [reviewer]
+      protocol: request_review  # formal review request
+    - from: reviewer
+      to: [architect, developer]
+      protocol: feedback        # review results
+  broadcast:
+    enabled: true
+    from: [architect]          # only architect can broadcast
+```
+
+**Как это работает в NATS:**
+
+Topology enforcement через subject-based routing + ACL:
+
+```
+# full_mesh: все подписаны на cell.{ns}.*.inbox
+# custom routes: cell-runtime проверяет route table перед send
+
+Cell "developer-0" пытается отправить сообщение "reviewer-0":
+1. cell-runtime проверяет topology routes
+2. developer → reviewer разрешён с protocol "request_review"
+3. Сообщение форматируется по протоколу request_review
+4. Публикуется в cell.project-x.reviewer-0.inbox
+
+Cell "developer-0" пытается отправить сообщение "developer-1":
+1. cell-runtime проверяет topology routes
+2. developer → developer НЕТ в routes
+3. Сообщение отклонено, Cell получает ошибку:
+   "Topology violation: developer cannot message developer directly"
+```
+
+Route table инжектится в Cell Pod через ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: topology-code-review-team
+data:
+  routes.json: |
+    {
+      "architect": ["developer", "reviewer"],
+      "developer": ["architect", "reviewer"],
+      "reviewer": ["architect"]
+    }
+```
+
+Cell-runtime загружает routes.json при старте и фильтрует `send_message` tool.
+
+### 2.4 — Children & spawn_cell tool
+
+Cell может создавать дочерние Cell'ы динамически.
+
+**spawn_cell tool definition:**
+
+```typescript
+const spawnCellTool = {
+  name: 'spawn_cell',
+  description: 'Create a child Cell with specified capabilities',
+  input_schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string', description: 'Child cell name' },
+      systemPrompt: { type: 'string', description: 'What this cell does' },
+      model: { type: 'string', description: 'LLM model to use' },
+      tools: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Tool names to give the child'
+      },
+      budget: { type: 'number', description: 'Max cost for this child' }
+    },
+    required: ['name', 'systemPrompt']
+  }
+}
+```
+
+**Execution flow:**
+
+```
+1. Parent Cell calls spawn_cell tool
+2. cell-runtime creates a new Cell CRD:
+   - metadata.name = "{parent}-{child-name}"
+   - ownerReferences → parent Cell CRD
+   - budget <= parent's remaining budget
+3. Operator picks up new Cell CRD → creates Pod
+4. Child subscribes to NATS inbox
+5. Parent receives confirmation: "Cell spawned: researcher-sub-1"
+6. Parent can now send_message to child
+7. On parent deletion → K8s cascades → child deleted
+```
+
+**Budget enforcement:**
+
+```typescript
+async function handleSpawnCell(parent: CellState, input: SpawnInput) {
+  const parentBudget = parent.resources.remainingBudget
+  const childBudget = input.budget ?? parentBudget * 0.1  // default 10%
+
+  if (childBudget > parentBudget) {
+    return { error: 'Insufficient budget. Remaining: $' + parentBudget }
+  }
+
+  // Deduct from parent
+  parent.resources.remainingBudget -= childBudget
+
+  // Create child Cell CRD
+  await k8s.createCell({
+    name: `${parent.name}-${input.name}`,
+    namespace: parent.namespace,
+    ownerRef: parent.uid,
+    spec: {
+      mind: {
+        provider: input.provider ?? parent.spec.mind.provider,
+        model: input.model ?? parent.spec.mind.model,
+        systemPrompt: input.systemPrompt,
+      },
+      tools: input.tools?.map(t => ({ name: t })),
+      resources: {
+        maxTotalCost: childBudget,
+      }
+    }
+  })
+
+  return { status: 'spawned', name: `${parent.name}-${input.name}`, budget: childBudget }
+}
+```
+
+---
+
+## Operator changes
+
+Phase 2 adds two new controllers to the operator:
+
+```typescript
+// packages/operator/src/index.ts
+
+// Phase 1
+const cellController = new CellController(k8sClient, nats, postgres)
+
+// Phase 2
+const formationController = new FormationController(k8sClient, cellController)
+const missionController = new MissionController(k8sClient, nats, postgres)
+
+// All controllers run in parallel, each watching their CRD
+await Promise.all([
+  cellController.watch(),
+  formationController.watch(),
+  missionController.watch(),
+])
+```
+
+**Formation Controller** watches Formation CRDs → creates/updates/deletes Cell CRDs.  
+**Mission Controller** watches Mission CRDs → sends objectives, runs checks, manages lifecycle.  
+**Cell Controller** (Phase 1) unchanged — still watches Cell CRDs → manages Pods.
+
+Hierarchy: Formation → Cell → Pod. Each level uses ownerReferences for cascading deletion.
+
+---
+
+## Shared workspace
+
+Formation нуждается в общем файловом пространстве для Cell'ов.
+
+```yaml
+# Operator creates PVC per Formation
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace-code-review-team
+  namespace: project-x
+  ownerReferences:
+    - kind: Formation
+      name: code-review-team
+spec:
+  accessModes: [ReadWriteMany]   # minikube supports this with hostPath
+  resources:
+    requests:
+      storage: 1Gi
+```
+
+Mounted into each Cell Pod:
+
+```yaml
+# Cell Pod template gets volume mount
+volumeMounts:
+  - name: workspace
+    mountPath: /workspace
+    subPath: shared          # shared area
+  - name: workspace
+    mountPath: /workspace/private/{cellName}
+    subPath: private/{cellName}   # cell's own area
+```
+
+Structure inside PVC:
+
+```
+/workspace/
+├── shared/              # all cells can read/write
+│   ├── src/
+│   ├── tests/
+│   └── docs/
+└── private/
+    ├── architect-0/     # only architect-0 can write
+    ├── developer-0/
+    ├── developer-1/
+    └── reviewer-0/
+```
+
+Conflict resolution: Cell'ы пишут в свой private dir, потом явно копируют в shared через `commit_file` tool. Merge conflicts → architect решает.
+
+---
+
+## New CLI commands
+
+```bash
+# Formations
+kais apply -f formation.yaml
+kais get formations
+kais describe formation code-review-team
+kais delete formation code-review-team
+kais scale formation code-review-team --cell developer --replicas 3
+
+# Missions
+kais apply -f mission.yaml
+kais get missions
+kais describe mission implement-auth-module
+kais mission status implement-auth-module    # detailed check status
+kais mission retry implement-auth-module     # force retry
+kais mission abort implement-auth-module
+
+# Topology
+kais topology show code-review-team          # ASCII graph
+# Output:
+#   architect-0 ──→ developer-0
+#       │       ──→ developer-1
+#       │       ──→ reviewer-0
+#       │
+#   developer-0 ──→ architect-0
+#               ──→ reviewer-0
+#   developer-1 ──→ architect-0
+#               ──→ reviewer-0
+#   reviewer-0  ──→ architect-0
+
+# Interaction
+kais exec architect-0 -- "Prioritize the middleware first"
+kais logs formation code-review-team    # interleaved logs from all cells
+kais events -n project-x -w            # watch all events
+```
+
+---
+
+## Example: full Phase 2 workflow
+
+```bash
+# Setup
+$ kais up
+$ kubectl create ns project-x
+
+# Deploy team
+$ kais apply -f formation.yaml
+formation.kais.io/code-review-team created
+
+$ kubectl get cells -n project-x
+NAME           STATUS    MODEL              COST    AGE
+architect-0    Running   claude-sonnet-4    0.000   5s
+developer-0    Running   qwen2.5:32b        0.000   4s
+developer-1    Running   qwen2.5:32b        0.000   4s
+reviewer-0     Running   claude-sonnet-4    0.000   3s
+
+# Launch mission
+$ kais apply -f mission.yaml
+mission.kais.io/implement-auth-module created
+
+# Watch progress
+$ kais events -n project-x -w
+14:00:01 Mission    implement-auth-module  Started (attempt 1/3)
+14:00:01 Cell       architect-0            Message: "New mission: implement JWT..."
+14:00:05 Cell       architect-0            LLM call (planning)
+14:00:12 Cell       architect-0            → developer-0: "Implement login endpoint..."
+14:00:12 Cell       architect-0            → developer-1: "Implement middleware..."
+14:00:15 Cell       developer-0            LLM call (coding)
+14:00:18 Cell       developer-0            Tool: write_file(/workspace/private/developer-0/login.ts)
+14:02:30 Cell       developer-0            Tool: commit_file(login.ts → shared)
+14:02:31 Cell       developer-0            → architect-0: "Login endpoint ready"
+14:03:45 Cell       developer-1            → architect-0: "Middleware ready"
+14:03:50 Cell       architect-0            → reviewer-0: "Please review src/"
+14:04:10 Cell       reviewer-0             LLM call (reviewing)
+14:04:25 Cell       reviewer-0             → architect-0: "Approved with minor notes"
+14:04:30 Mission    implement-auth-module  Check: files-exist ✓
+14:04:35 Mission    implement-auth-module  Check: tests-pass ✓
+14:04:36 Mission    implement-auth-module  Check: coverage ✓ (87%)
+14:04:37 Mission    implement-auth-module  Review: Approved
+14:04:37 Mission    implement-auth-module  Succeeded ($3.42, 4m36s)
+
+$ kais describe mission implement-auth-module
+Name:      implement-auth-module
+Status:    Succeeded
+Attempt:   1/3
+Duration:  4m36s
+Cost:      $3.42
+Checks:
+  files-exist   ✓  All files present
+  tests-pass    ✓  12/12 tests passed
+  coverage      ✓  87% (required: 80%)
+Review:         ✓  Approved by reviewer-0
+```
+
+---
+
+## DB schema additions
+
+```sql
+-- Formation state
+CREATE TABLE formations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT 'default',
+  spec JSONB NOT NULL,
+  status JSONB NOT NULL DEFAULT '{"phase": "Pending"}',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(name, namespace)
+);
+
+-- Mission state + history
+CREATE TABLE missions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT 'default',
+  spec JSONB NOT NULL,
+  status JSONB NOT NULL DEFAULT '{"phase": "Pending", "attempt": 0}',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(name, namespace)
+);
+
+-- Mission check results (history of each check run)
+CREATE TABLE mission_checks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  mission_id UUID REFERENCES missions(id) ON DELETE CASCADE,
+  attempt INT NOT NULL,
+  check_name TEXT NOT NULL,
+  status TEXT NOT NULL,        -- 'passed', 'failed', 'error'
+  output TEXT,
+  checked_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_mission_checks ON mission_checks(mission_id, attempt);
+
+-- Parent-child relationships (supplements K8s ownerReferences)
+ALTER TABLE cells ADD COLUMN parent_cell_id UUID REFERENCES cells(id) ON DELETE CASCADE;
+ALTER TABLE cells ADD COLUMN formation_id UUID REFERENCES formations(id) ON DELETE CASCADE;
+ALTER TABLE cells ADD COLUMN budget_allocated NUMERIC DEFAULT 0;
+ALTER TABLE cells ADD COLUMN budget_spent NUMERIC DEFAULT 0;
+```
+
+---
+
+## What Phase 2 does NOT include
+
+| Feature | Why deferred |
+|---------|-------------|
+| Protocol state machines (contract, deliberation, auction) | Phase 3 — need experiment engine to test them |
+| Stigmergy blackboard | Phase 3 — special topology type, needs shared state |
+| Experiment engine | Phase 3 |
+| In-process mode | Phase 3 — needed for experiments |
+| Knowledge graph | Phase 4 |
+| Blueprint templates | Phase 4 |
+| Dynamic scaling (Swarm) | Phase 6 |
+| Recursive ecosystems (nested Formation) | Phase 8+ |
+
+Phase 2 topology supports `stigmergy` type in schema but implementation is Phase 3.
+
+---
+
+## Migration from Phase 1
+
+Zero breaking changes. Phase 2 adds:
+- 2 new CRDs (Formation, Mission)
+- 2 new controllers in operator
+- `children` field in Cell CRD schema
+- `spawn_cell` tool in cell-runtime
+- PVC provisioning for shared workspace
+- New CLI commands
+
+Existing standalone Cell'ы продолжают работать. Formation — просто удобный способ создать группу Cell'ов. Можно не использовать.

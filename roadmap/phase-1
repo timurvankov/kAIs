@@ -1,0 +1,610 @@
+# kAIs — Phase 1: Foundation (K8s-native)
+
+**Goal:** Minimal working system on minikube. Cell as CRD, operator reconciles state, everything runs in cluster.
+
+**Duration estimate:** 1–2 weeks of Opus coding sessions
+
+---
+
+## Why K8s-native from day one
+
+- Ты уже работаешь в K8s/Terraform/GitOps — не нужна промежуточная абстракция
+- Cell = CRD. `kubectl apply -f cell.yaml` уже работает — kais CLI тонкая обёртка
+- Reconciliation loop = стандартный K8s operator pattern, не самодельный setInterval
+- Postgres и NATS — Helm charts, один `helmfile apply`
+- Scaling к production — нулевой переход, уже там
+- minikube на 16GB RAM тянет всё что нужно для Phase 1
+
+---
+
+## Architecture on minikube
+
+```
+┌─────────────────────── minikube ───────────────────────┐
+│                                                         │
+│  ┌─────────────┐  CRDs: Cell, Formation, Mission (ph2) │
+│  │ kais-operator│──── watches CRDs, reconciles          │
+│  │ (Deployment) │──── spawns Cell Pods                  │
+│  └──────┬───────┘                                       │
+│         │ creates/manages                               │
+│  ┌──────▼───────┐                                       │
+│  │  Cell Pods   │  each Cell = Pod with mind container  │
+│  │ ┌───┐ ┌───┐ │  communicates via NATS                │
+│  │ │ C │ │ C │ │                                        │
+│  │ └───┘ └───┘ │                                        │
+│  └──────────────┘                                       │
+│                                                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │ Postgres │  │   NATS   │  │ kais-api │              │
+│  │ (StateSt)│  │(JetStrm) │  │ (Fastify)│              │
+│  └──────────┘  └──────────┘  └──────────┘              │
+│                                                         │
+│  ┌──────────┐                                           │
+│  │  MinIO   │  (optional, for file artifacts)           │
+│  └──────────┘                                           │
+└─────────────────────────────────────────────────────────┘
+
+Your machine:
+  $ kais apply -f cell.yaml    # → kubectl apply + API enrichment
+  $ kais logs researcher       # → kubectl logs + event store query
+  $ kais exec researcher       # → NATS publish to cell inbox
+```
+
+---
+
+## Module breakdown
+
+### 1.1 — Project skeleton
+
+```
+kais/
+├── packages/
+│   ├── core/           # types, CRD schemas, Zod validation
+│   ├── operator/       # K8s operator (controller-runtime pattern)
+│   ├── cell-runtime/   # runs INSIDE Cell Pod — agent loop
+│   ├── mind/           # LLM abstraction (Anthropic, Ollama)
+│   ├── api/            # REST/WS API server (optional enrichment layer)
+│   └── cli/            # kais CLI
+├── helm/
+│   ├── kais-operator/  # operator Helm chart
+│   ├── kais-cell/      # Cell Pod template (used by operator)
+│   └── kais-infra/     # Postgres + NATS + MinIO
+├── crds/               # CRD YAML definitions
+├── examples/           # example Cell/Formation specs
+├── Tiltfile            # Tilt for dev loop (build → push → deploy)
+├── skaffold.yaml       # alternative to Tilt
+├── Dockerfile.operator
+├── Dockerfile.cell
+└── package.json
+```
+
+**Tech:** TypeScript, pnpm workspaces, Turborepo, Vitest.  
+**Dev loop:** Tilt (watches code → builds image → deploys to minikube → streams logs).
+
+### 1.2 — CRD definitions (`crds/`)
+
+```yaml
+# crds/cell-crd.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cells.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Cell
+    plural: cells
+    singular: cell
+    shortNames: ["cl"]
+  scope: Namespaced        # namespace = realm
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                mind:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                      enum: ["anthropic", "openai", "ollama"]
+                    model:
+                      type: string
+                    systemPrompt:
+                      type: string
+                    temperature:
+                      type: number
+                    maxTokens:
+                      type: integer
+                  required: ["provider", "model", "systemPrompt"]
+                tools:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      config: { type: object, x-kubernetes-preserve-unknown-fields: true }
+                resources:
+                  type: object
+                  properties:
+                    maxTokensPerTurn: { type: integer }
+                    maxCostPerHour: { type: number }
+                    maxTotalCost: { type: number }
+                    cpuLimit: { type: string }
+                    memoryLimit: { type: string }
+              required: ["mind"]
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Completed", "Failed", "Paused"]
+                podName: { type: string }
+                totalCost: { type: number }
+                totalTokens: { type: integer }
+                lastActive: { type: string, format: date-time }
+                message: { type: string }
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Model
+          type: string
+          jsonPath: .spec.mind.model
+        - name: Cost
+          type: number
+          jsonPath: .status.totalCost
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+```
+
+**Killer feature:** After CRD is applied, `kubectl get cells` just works:
+
+```bash
+$ kubectl get cells -n demo
+NAME         STATUS    MODEL              COST    AGE
+researcher   Running   claude-sonnet-4    0.042   5m
+coder        Running   qwen2.5:32b       0.000   3m
+```
+
+**Deliverable:** CRD installed on minikube, `kubectl apply -f cell.yaml` accepted.
+
+### 1.3 — Infra Helm chart (`helm/kais-infra/`)
+
+Single helmfile for all dependencies:
+
+```yaml
+# helmfile.yaml
+repositories:
+  - name: bitnami
+    url: https://charts.bitnami.com/bitnami
+  - name: nats
+    url: https://nats-io.github.io/k8s/helm/charts
+
+releases:
+  - name: postgres
+    namespace: kais-system
+    chart: bitnami/postgresql
+    values:
+      - auth:
+          postgresPassword: kais
+          database: kais
+        primary:
+          persistence:
+            size: 5Gi
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+            limits: { memory: 512Mi, cpu: 500m }
+
+  - name: nats
+    namespace: kais-system
+    chart: nats/nats
+    values:
+      - nats:
+          jetstream:
+            enabled: true
+            memStorage:
+              enabled: true
+              size: 256Mi
+            fileStorage:
+              enabled: true
+              size: 1Gi
+        cluster:
+          enabled: false   # single node for minikube
+
+  - name: ollama
+    namespace: kais-system
+    chart: ./charts/ollama  # simple deployment, optional
+    condition: ollama.enabled
+```
+
+**Setup:**
+```bash
+minikube start --cpus=4 --memory=8g --driver=docker
+helmfile apply
+kubectl apply -f crds/
+```
+
+**Deliverable:** Postgres, NATS, (optional Ollama) running in minikube.
+
+### 1.4 — Mind abstraction (`packages/mind`)
+
+Same as before — unified LLM interface. Runs inside Cell Pod.
+
+```typescript
+interface Mind {
+  think(input: ThinkInput): Promise<ThinkOutput>
+}
+
+// Providers
+class AnthropicMind implements Mind { /* ... */ }
+class OllamaMind implements Mind { /* ... */ }
+class OpenAIMind implements Mind { /* ... */ }
+```
+
+LLM API keys passed as K8s Secrets:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-credentials
+  namespace: kais-system
+type: Opaque
+data:
+  ANTHROPIC_API_KEY: <base64>
+  OPENAI_API_KEY: <base64>
+```
+
+Operator mounts secret into Cell Pods automatically.
+
+**Deliverable:** Mind works from inside a Pod, tests pass.
+
+### 1.5 — Cell Runtime (`packages/cell-runtime`)
+
+This is the **process that runs inside each Cell Pod**. Single container, single purpose.
+
+```
+Cell Pod lifecycle:
+1. Pod starts → cell-runtime process
+2. Reads Cell spec from env/configmap (injected by operator)
+3. Connects to NATS (service discovery via K8s DNS)
+4. Subscribes to inbox: cell.{namespace}.{name}.inbox
+5. Waits for messages
+6. On message: agentic loop (think → tool → think → respond)
+7. Publishes results to outbox
+8. Reports metrics to Postgres
+9. On SIGTERM: graceful shutdown
+```
+
+```dockerfile
+# Dockerfile.cell
+FROM node:22-slim
+WORKDIR /app
+COPY packages/cell-runtime/dist ./
+COPY packages/mind/dist ./mind/
+COPY packages/core/dist ./core/
+CMD ["node", "index.js"]
+```
+
+Pod spec template (used by operator):
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cell-{name}
+  namespace: {namespace}
+  labels:
+    kais.io/cell: {name}
+    kais.io/role: cell
+  ownerReferences:
+    - apiVersion: kais.io/v1
+      kind: Cell
+      name: {name}
+      uid: {uid}
+spec:
+  containers:
+    - name: mind
+      image: kais-cell:latest
+      env:
+        - name: CELL_NAME
+          value: {name}
+        - name: CELL_SPEC
+          value: {spec_json}
+        - name: NATS_URL
+          value: nats://nats.kais-system:4222
+        - name: POSTGRES_URL
+          value: postgresql://postgres:kais@postgres-postgresql.kais-system:5432/kais
+      envFrom:
+        - secretRef:
+            name: llm-credentials
+      resources:
+        requests:
+          memory: 128Mi
+          cpu: 100m
+        limits:
+          memory: {memoryLimit}
+          cpu: {cpuLimit}
+  restartPolicy: Never  # operator handles restarts
+```
+
+**Key:** `ownerReferences` — when Cell CRD is deleted, K8s garbage-collects the Pod automatically.
+
+**Deliverable:** Cell Pod runs in minikube, receives NATS messages, calls LLM, responds.
+
+### 1.6 — Operator (`packages/operator`)
+
+K8s operator watching Cell CRDs. Uses `@kubernetes/client-node` or a lighter TypeScript operator framework.
+
+```typescript
+// Simplified operator loop
+async function reconcileCell(cell: CellResource) {
+  const podName = `cell-${cell.metadata.name}`
+  const pod = await k8s.getPod(podName, cell.metadata.namespace)
+
+  if (!pod) {
+    // Desired but not running → create Pod
+    await k8s.createPod(buildCellPod(cell))
+    await updateCellStatus(cell, { phase: 'Running', podName })
+    return
+  }
+
+  if (pod.status.phase === 'Failed' || pod.status.phase === 'Unknown') {
+    // Crashed → delete and recreate
+    await k8s.deletePod(podName, cell.metadata.namespace)
+    await k8s.createPod(buildCellPod(cell))
+    return
+  }
+
+  if (specChanged(cell, pod)) {
+    // Spec updated → rolling restart
+    await k8s.deletePod(podName, cell.metadata.namespace)
+    // Next reconcile will create new Pod
+    return
+  }
+
+  // Running and healthy → update status from Pod metrics
+  await syncCellStatus(cell, pod)
+}
+```
+
+The operator also:
+- Watches for Cell deletion → Pod auto-cleaned via ownerReferences
+- Updates `.status` subresource with cost/token counters
+- Emits K8s Events on state transitions
+
+```bash
+$ kubectl describe cell researcher
+Events:
+  Type    Reason    Age   Message
+  ----    ------    ---   -------
+  Normal  Created   5m    Cell Pod created
+  Normal  Running   5m    Cell is active, model: claude-sonnet-4
+  Normal  Message   2m    Received message, processing...
+  Normal  Response  2m    Response sent (523 tokens, $0.008)
+```
+
+**Deliverable:** Operator running as Deployment, auto-creates/heals Cell Pods.
+
+### 1.7 — API server (`packages/api`)
+
+Thin layer over K8s API + enrichment from Postgres. Optional — `kubectl` works directly, but API adds:
+
+- Aggregated logs from Postgres (not just Pod stdout)
+- WebSocket for interactive `attach`
+- NATS message injection for `exec`
+- Cost/usage dashboard data
+
+```
+POST   /api/v1/cells/:name/exec    → publish to NATS inbox
+GET    /api/v1/cells/:name/logs    → query cell_events from Postgres
+WS     /api/v1/cells/:name/attach  → bidirectional NATS bridge
+GET    /api/v1/cells/:name/usage   → cost/token stats
+```
+
+Deployed as a Deployment + ClusterIP Service in `kais-system`.
+
+**Deliverable:** API running in cluster, accessible via `minikube service` or port-forward.
+
+### 1.8 — CLI (`packages/cli`)
+
+Thin wrapper. Most commands → `kubectl` under the hood, some → kais-api.
+
+```bash
+# Direct kubectl passthrough
+kais apply -f cell.yaml        # → kubectl apply -f cell.yaml
+kais get cells                  # → kubectl get cells (uses CRD printer columns)
+kais describe cell researcher   # → kubectl describe cell researcher
+kais delete cell researcher     # → kubectl delete cell researcher
+
+# Via kais-api (needs enrichment)
+kais exec researcher -- "msg"   # → POST /api/v1/cells/researcher/exec
+kais logs researcher            # → GET /api/v1/cells/researcher/logs
+kais attach researcher          # → WS /api/v1/cells/researcher/attach
+kais usage researcher           # → GET /api/v1/cells/researcher/usage
+
+# Convenience
+kais init                       # → scaffold project (helmfile, CRDs, example cells)
+kais up                         # → minikube start + helmfile apply + CRDs
+kais down                       # → minikube stop
+```
+
+**Deliverable:** Full CLI workflow works end-to-end.
+
+---
+
+## Dependency order
+
+```
+1.1 skeleton
+ ├── 1.2 CRDs (no code deps)
+ ├── 1.3 infra helm (no code deps)
+ ├── 1.4 mind (needs core)
+ │    └── 1.5 cell-runtime (needs mind + core)
+ │         └── Dockerfile.cell
+ └── 1.6 operator (needs core)
+      └── Dockerfile.operator
+           └── 1.7 api (needs core)
+                └── 1.8 cli (needs api)
+```
+
+CRDs, infra, and mind can be built in parallel.  
+Critical path: core → mind → cell-runtime → (operator in parallel) → api → cli.
+
+---
+
+## Dev workflow with Tilt
+
+```python
+# Tiltfile
+load('ext://restart_process', 'docker_build_with_restart')
+
+# CRDs
+k8s_yaml('crds/cell-crd.yaml')
+
+# Infra (only if not using helmfile separately)
+k8s_yaml(helm('helm/kais-infra'))
+
+# Operator — live reload on code change
+docker_build_with_restart(
+  'kais-operator',
+  '.',
+  dockerfile='Dockerfile.operator',
+  live_update=[sync('./packages/operator/dist', '/app')],
+  entrypoint=['node', 'index.js']
+)
+k8s_yaml(helm('helm/kais-operator'))
+
+# Cell image — rebuilt when cell-runtime or mind changes
+docker_build(
+  'kais-cell',
+  '.',
+  dockerfile='Dockerfile.cell',
+)
+```
+
+```bash
+tilt up   # starts everything, watches for changes, streams logs
+```
+
+Change operator code → Tilt rebuilds → redeploys in seconds → see effect.
+
+---
+
+## Example: Phase 1 end-state demo
+
+**cell.yaml:**
+```yaml
+apiVersion: kais.io/v1
+kind: Cell
+metadata:
+  name: researcher
+  namespace: demo
+spec:
+  mind:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    systemPrompt: |
+      You are a research assistant. When you receive a topic,
+      search for information and report findings.
+    temperature: 0.7
+  tools:
+    - name: web_search
+    - name: send_message
+  resources:
+    maxTokensPerTurn: 4096
+    maxCostPerHour: 0.50
+    memoryLimit: 256Mi
+    cpuLimit: 500m
+```
+
+**Session:**
+```bash
+$ kais up
+✓ minikube running (4 CPUs, 8GB RAM)
+✓ postgres ready
+✓ nats ready (JetStream enabled)
+✓ CRDs installed
+✓ operator running
+
+$ kubectl create ns demo
+$ kais apply -f cell.yaml
+cell.kais.io/researcher created
+
+$ kubectl get cells -n demo
+NAME         STATUS    MODEL              COST    AGE
+researcher   Running   claude-sonnet-4    0.000   8s
+
+$ kubectl get pods -n demo
+NAME             READY   STATUS    RESTARTS   AGE
+cell-researcher  1/1     Running   0          6s
+
+$ kais exec researcher -- "Research recent advances in multi-agent AI systems"
+Message sent to researcher
+
+$ kais logs researcher
+[14:23:01] MESSAGE_RECEIVED  "Research recent advances..."
+[14:23:02] LLM_CALL          claude-sonnet-4 (847 input tok)
+[14:23:05] TOOL_USE           web_search("multi-agent AI 2025")
+[14:23:08] LLM_CALL          claude-sonnet-4 (+ tool result)
+[14:23:12] RESPONSE           "Here are the key advances..." ($0.008)
+
+# Kill the pod — operator restarts it
+$ kubectl delete pod cell-researcher -n demo
+pod "cell-researcher" deleted
+$ kubectl get pods -n demo   # 3 seconds later
+NAME             READY   STATUS    RESTARTS   AGE
+cell-researcher  1/1     Running   0          2s
+
+# Clean up
+$ kais delete cell researcher -n demo
+cell.kais.io/researcher deleted
+# Pod auto-deleted via ownerReferences
+```
+
+---
+
+## What Phase 1 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Formation CRD (multi-Cell groups) | 2 |
+| Mission CRD (task with completion) | 2 |
+| Topology CRD (communication control) | 2 |
+| Experiment CRD + engine | 3 |
+| In-process mode (worker_threads for fast experiments) | 3 |
+| Knowledge graph (Neo4j/Graphiti) | 4 |
+| Blueprint CRD (templates) | 4 |
+| Instinct CRD (custom controllers) | 5 |
+| Ritual CRD (cron) | 5 |
+| Blueprint evolution | 6 |
+| Swarm autoscaler | 6 |
+| Web dashboard | 7 |
+| Recursive ecosystems | 8+ |
+
+---
+
+## Resource requirements (minikube)
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Postgres | 250m | 256Mi | Single instance, 5Gi PV |
+| NATS | 100m | 128Mi | JetStream, 1Gi storage |
+| kais-operator | 100m | 128Mi | Lightweight watcher |
+| kais-api | 100m | 128Mi | Fastify server |
+| Cell Pod (each) | 100m | 128Mi | Mostly idle, spikes on LLM response |
+| **Total (base)** | **550m** | **640Mi** | Before any Cells |
+| **+ 10 Cells** | **1550m** | **1920Mi** | Comfortable on 4 CPU / 8GB |
+| **+ Ollama** | +4000m | +8Gi | Needs dedicated resources |
+
+**Recommendation:** `minikube start --cpus=4 --memory=8g` без Ollama, `--cpus=8 --memory=16g` с Ollama.

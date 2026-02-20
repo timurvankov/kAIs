@@ -1,0 +1,981 @@
+# kAIs — Phase 5: Instinct + Ritual + Observability
+
+**Goal:** Custom controllers для поведений которые нельзя описать декларативно. Периодические задачи. Полная observability — traces, dashboards, alerts.
+
+**Depends on:** Phase 4 (Knowledge Graph, Blueprints)
+
+**Duration estimate:** 2 weeks
+
+---
+
+## Зачем Phase 5
+
+Phase 1–4: система умеет запускать команды, давать задачи, проводить эксперименты, накапливать знания. Но:
+
+- **Instinct** — как описать "если Cell тратит >80% бюджета за первые 30% задачи, переключи на дешёвую модель"? Это не Formation, не Mission, это reactive behavior. В K8s это Operator pattern. В kAIs — Instinct.
+- **Ritual** — "каждое утро запускай code review последних коммитов". CronJob для AI.
+- **Observability** — логи в Postgres достаточны для отладки, но не для понимания. Нужны distributed traces, метрики, дашборды, алерты.
+
+---
+
+## 5.1 — Instinct CRD
+
+Instinct = custom controller. Реагирует на события, принимает решения, выполняет действия. Аналог K8s Operator, но для AI-специфичных поведений.
+
+### Instinct как event → condition → action
+
+```yaml
+apiVersion: kais.io/v1
+kind: Instinct
+metadata:
+  name: budget-guardian
+  namespace: kais-system     # cluster-wide instincts
+spec:
+  description: |
+    Monitors Cell budget consumption and takes action
+    when spending rate is unsustainable.
+
+  # What events to watch
+  watch:
+    events:
+      - type: cell.llm_call
+      - type: cell.status_update
+      - type: mission.check_failed
+    # Or watch specific resources
+    resources:
+      - kind: Cell
+        fieldSelector: status.phase=Running
+      - kind: Mission
+        fieldSelector: status.phase=Running
+
+  # Rules: event patterns → conditions → actions
+  rules:
+    - name: overspending-detection
+      description: Cell spending too fast relative to mission progress
+      condition:
+        type: expression
+        # CEL (Common Expression Language) — same as K8s uses
+        expr: |
+          cell.status.budgetSpent / cell.spec.resources.maxTotalCost > 0.8
+          && mission.status.checksPassedRatio < 0.3
+      actions:
+        - type: switch_model
+          params:
+            target: "{{ cell.metadata.name }}"
+            from: "{{ cell.spec.mind.model }}"
+            to: ollama/qwen2.5:32b
+        - type: notify
+          params:
+            channel: cell.events
+            message: "Cell {{ cell.metadata.name }} switched to budget model (80% budget spent, 30% progress)"
+
+    - name: stuck-detection
+      description: Cell hasn't made progress in 10 minutes
+      condition:
+        type: expression
+        expr: |
+          now() - cell.status.lastProgressAt > duration("10m")
+          && cell.status.phase == "Running"
+      actions:
+        - type: send_message
+          params:
+            target: "{{ cell.metadata.name }}"
+            message: |
+              You seem stuck. Try a different approach:
+              1. Break the current task into smaller steps
+              2. Ask the architect for guidance
+              3. Skip this part and move to the next
+        - type: emit_event
+          params:
+            type: instinct.intervention
+            reason: stuck-detection
+
+    - name: cascade-failure-prevention
+      description: If >50% of Formation cells failed, pause the Formation
+      condition:
+        type: expression
+        expr: |
+          formation.status.failedCells / formation.status.totalCells > 0.5
+      actions:
+        - type: pause
+          params:
+            target: "{{ formation.metadata.name }}"
+            kind: Formation
+        - type: notify
+          params:
+            channel: cell.events
+            severity: warning
+            message: "Formation {{ formation.metadata.name }} paused: >50% cells failed"
+
+    - name: quality-gate
+      description: Auto-reject mission if code quality below threshold
+      condition:
+        type: expression
+        expr: |
+          event.type == "mission.review_completed"
+          && event.payload.quality_score < 5
+      actions:
+        - type: update_status
+          params:
+            target: "{{ mission.metadata.name }}"
+            kind: Mission
+            status:
+              review:
+                status: Rejected
+                feedback: "Auto-rejected: quality score {{ event.payload.quality_score }}/10 below threshold 5"
+
+  # How often to evaluate (for polling-based conditions)
+  evaluationInterval: 30s
+
+  # Instinct priority (higher = evaluated first)
+  priority: 100
+
+status:
+  phase: Active
+  rulesMatched: 47
+  actionsExecuted: 12
+  lastTriggered: "2026-02-20T14:30:00Z"
+  ruleStats:
+    overspending-detection: { matched: 8, actioned: 8 }
+    stuck-detection: { matched: 23, actioned: 4 }
+    cascade-failure-prevention: { matched: 0, actioned: 0 }
+    quality-gate: { matched: 16, actioned: 0 }
+```
+
+### LLM-powered Instinct (advanced)
+
+Некоторые условия слишком сложны для CEL expressions. Instinct может использовать LLM для оценки:
+
+```yaml
+apiVersion: kais.io/v1
+kind: Instinct
+metadata:
+  name: team-dynamics-monitor
+spec:
+  watch:
+    events:
+      - type: cell.message_sent
+
+  rules:
+    - name: communication-breakdown
+      description: Detect when team communication becomes unproductive
+      condition:
+        type: llm_judge
+        params:
+          provider: ollama
+          model: qwen2.5:32b
+          # Evaluate last N messages, not every single one
+          sampleSize: 20
+          evaluationInterval: 5m
+          prompt: |
+            Analyze these recent messages between team members.
+            Are they making progress or going in circles?
+            Signs of trouble: repeating same arguments, ignoring feedback,
+            working on wrong things, miscommunication.
+
+            Messages:
+            {{ messages }}
+
+            Respond with JSON:
+            {"productive": true/false, "issue": "description if not productive"}
+      actions:
+        - type: send_message
+          params:
+            target: "{{ formation.cells[0].name }}"  # architect
+            message: |
+              Team dynamics alert: {{ condition.result.issue }}
+              Consider: reassigning tasks, clarifying requirements,
+              or calling a deliberation.
+```
+
+### Instinct Controller implementation
+
+```typescript
+class InstinctController {
+  private instincts: InstinctResource[] = []
+  private eventBuffer: Map<string, Event[]> = new Map()
+
+  async watch() {
+    // Watch Instinct CRDs
+    const instinctWatcher = k8s.watch('kais.io/v1', 'instincts')
+    instinctWatcher.on('ADDED', i => this.instincts.push(i))
+    instinctWatcher.on('DELETED', i => this.removeInstinct(i))
+
+    // Subscribe to all cell events via NATS
+    nats.subscribe('cell.>', async (event) => {
+      this.bufferEvent(event)
+      await this.evaluateEventTriggers(event)
+    })
+
+    // Polling loop for time-based conditions
+    setInterval(() => this.evaluatePollingRules(), 5000)
+  }
+
+  async evaluateEventTriggers(event: Event) {
+    // Sort instincts by priority (higher first)
+    const sorted = [...this.instincts].sort((a, b) => b.spec.priority - a.spec.priority)
+
+    for (const instinct of sorted) {
+      for (const rule of instinct.spec.rules) {
+        if (!this.eventMatchesWatch(event, instinct.spec.watch)) continue
+
+        const context = await this.buildContext(event, instinct)
+        const matched = await this.evaluateCondition(rule.condition, context)
+
+        if (matched) {
+          await this.executeActions(rule.actions, context)
+          await this.recordTrigger(instinct, rule, context)
+        }
+      }
+    }
+  }
+
+  async evaluateCondition(condition: Condition, context: any): Promise<boolean> {
+    switch (condition.type) {
+      case 'expression':
+        return celEvaluate(condition.expr, context)
+
+      case 'llm_judge':
+        // Rate-limited, uses sample of recent events
+        const messages = this.getSample(context, condition.params.sampleSize)
+        const result = await mind.think({
+          provider: condition.params.provider,
+          model: condition.params.model,
+          messages: [{ role: 'user', content: condition.params.prompt.replace('{{ messages }}', JSON.stringify(messages)) }],
+        })
+        const parsed = JSON.parse(result.content)
+        context.conditionResult = parsed
+        return !parsed.productive  // trigger if NOT productive
+
+      default:
+        return false
+    }
+  }
+
+  async executeActions(actions: Action[], context: any) {
+    for (const action of actions) {
+      switch (action.type) {
+        case 'switch_model':
+          await this.switchCellModel(
+            render(action.params.target, context),
+            render(action.params.to, context)
+          )
+          break
+
+        case 'send_message':
+          await nats.publish(
+            `cell.${context.namespace}.${render(action.params.target, context)}.inbox`,
+            { content: render(action.params.message, context), source: 'instinct' }
+          )
+          break
+
+        case 'pause':
+          await k8s.patchStatus(
+            action.params.kind,
+            render(action.params.target, context),
+            { phase: 'Paused', reason: 'instinct-triggered' }
+          )
+          break
+
+        case 'emit_event':
+          await nats.publish(`instinct.${action.params.type}`, {
+            reason: action.params.reason,
+            context: context,
+          })
+          break
+
+        case 'notify':
+          await this.notify(action.params)
+          break
+      }
+    }
+  }
+}
+```
+
+### Built-in Instincts (shipped with kAIs)
+
+```bash
+$ kais instinct list
+NAME                        SCOPE      RULES   TRIGGERED   STATUS
+budget-guardian              cluster    4       47          Active
+health-monitor              cluster    3       12          Active
+knowledge-hygiene           cluster    2       5           Active
+
+# These are installed by default, user can disable or override
+```
+
+**budget-guardian:** Overspending detection, model switching, Formation pausing.  
+**health-monitor:** Stuck detection, cascade failure prevention, auto-restart with backoff.  
+**knowledge-hygiene:** Prune low-confidence facts after 30 days, detect contradictions, suggest merges.
+
+---
+
+## 5.2 — Ritual CRD
+
+Ritual = CronJob для AI. Periodic tasks with scheduling.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Ritual
+metadata:
+  name: daily-code-review
+  namespace: project-x
+spec:
+  schedule: "0 9 * * 1-5"        # 9 AM weekdays, standard cron syntax
+
+  # What to do each run
+  action:
+    type: mission                   # create a Mission
+    mission:
+      formationRef: code-review-team  # existing Formation (must be running)
+      # Or blueprint to instantiate fresh each time:
+      # blueprintRef: code-review-team
+      # blueprintParams:
+      #   model_tier: budget
+      objective: |
+        Review all commits from the last 24 hours.
+        Focus on: security issues, breaking changes, test coverage.
+        Generate a summary report in /workspace/shared/reports/
+      completion:
+        checks:
+          - name: report-exists
+            type: fileExists
+            paths: [/workspace/shared/reports/daily-review-*.md]
+        timeout: 30m
+
+  # Or simpler action types:
+  # action:
+  #   type: message
+  #   target: architect-0
+  #   message: "Morning standup: what's everyone working on today?"
+
+  # action:
+  #   type: knowledge_maintenance
+  #   operations:
+  #     - promote        # run knowledge promotion cycle
+  #     - prune          # remove expired/low-confidence facts
+  #     - deduplicate    # merge similar facts
+
+  # Budget per run
+  budget:
+    maxCostPerRun: 2.00
+
+  # History retention
+  historyLimit: 30          # keep last 30 runs
+
+  # Concurrency
+  concurrencyPolicy: Forbid  # Skip if previous run still active
+  # concurrencyPolicy: Replace  # Kill previous, start new
+
+  # Suspend (pause without deleting)
+  suspend: false
+
+status:
+  phase: Active
+  lastRun:
+    startedAt: "2026-02-20T09:00:00Z"
+    completedAt: "2026-02-20T09:18:32Z"
+    result: Succeeded
+    cost: 1.23
+  nextRun: "2026-02-21T09:00:00Z"
+  totalRuns: 14
+  successRate: 0.93
+  history:
+    - run: 14
+      startedAt: "2026-02-20T09:00:00Z"
+      result: Succeeded
+      cost: 1.23
+    - run: 13
+      startedAt: "2026-02-19T09:00:00Z"
+      result: Succeeded
+      cost: 1.45
+    - run: 12
+      startedAt: "2026-02-18T09:00:00Z"
+      result: Failed
+      cost: 0.87
+      error: "Timeout: review took longer than 30m"
+```
+
+### Ritual Controller
+
+```typescript
+class RitualController {
+  private scheduler: Map<string, NodeJS.Timeout> = new Map()
+
+  async reconcileRitual(ritual: RitualResource) {
+    if (ritual.spec.suspend) {
+      this.cancelSchedule(ritual.metadata.name)
+      return
+    }
+
+    const nextRun = cronNext(ritual.spec.schedule)
+
+    if (this.shouldRun(ritual, nextRun)) {
+      // Check concurrency
+      if (ritual.spec.concurrencyPolicy === 'Forbid') {
+        const active = await this.getActiveRun(ritual)
+        if (active) {
+          emitEvent('RitualSkipped', ritual, 'Previous run still active')
+          return
+        }
+      }
+
+      if (ritual.spec.concurrencyPolicy === 'Replace') {
+        await this.abortActiveRun(ritual)
+      }
+
+      await this.executeRitual(ritual)
+    }
+
+    this.scheduleNext(ritual, nextRun)
+  }
+
+  async executeRitual(ritual: RitualResource) {
+    switch (ritual.spec.action.type) {
+      case 'mission':
+        // Create Mission CRD — MissionController handles the rest
+        await k8s.createMission({
+          name: `${ritual.metadata.name}-run-${ritual.status.totalRuns + 1}`,
+          namespace: ritual.metadata.namespace,
+          ownerRef: ritual,
+          spec: {
+            ...ritual.spec.action.mission,
+            budget: { maxCost: ritual.spec.budget.maxCostPerRun },
+          }
+        })
+        break
+
+      case 'message':
+        await nats.publish(
+          `cell.${ritual.metadata.namespace}.${ritual.spec.action.target}.inbox`,
+          { content: ritual.spec.action.message, source: 'ritual' }
+        )
+        break
+
+      case 'knowledge_maintenance':
+        for (const op of ritual.spec.action.operations) {
+          await knowledgeService[op]()
+        }
+        break
+    }
+  }
+}
+```
+
+### Common Ritual patterns
+
+```bash
+# Daily standup
+$ cat daily-standup.yaml
+spec:
+  schedule: "0 9 * * 1-5"
+  action:
+    type: message
+    target: architect-0
+    message: "Daily standup: summarize yesterday's progress and today's plan for each team member."
+
+# Weekly knowledge cleanup
+$ cat weekly-knowledge-cleanup.yaml
+spec:
+  schedule: "0 2 * * 0"    # Sunday 2 AM
+  action:
+    type: knowledge_maintenance
+    operations: [prune, deduplicate, promote]
+
+# Nightly regression tests
+$ cat nightly-tests.yaml
+spec:
+  schedule: "0 0 * * *"
+  action:
+    type: mission
+    mission:
+      blueprintRef: test-runner
+      blueprintParams:
+        scope: full
+      objective: "Run full regression test suite, report failures."
+      completion:
+        checks:
+          - name: report
+            type: fileExists
+            paths: [/workspace/shared/reports/regression-*.md]
+        timeout: 1h
+
+# Continuous monitoring (every 15 min)
+$ cat monitoring-check.yaml
+spec:
+  schedule: "*/15 * * * *"
+  action:
+    type: message
+    target: monitor-cell
+    message: "Check all monitored services, report any anomalies."
+  budget:
+    maxCostPerRun: 0.10
+  concurrencyPolicy: Forbid
+```
+
+---
+
+## 5.3 — Observability Stack
+
+### OpenTelemetry integration
+
+Every Cell emits structured traces:
+
+```typescript
+// In cell-runtime
+import { trace, SpanKind, context } from '@opentelemetry/api'
+
+const tracer = trace.getTracer('kais-cell')
+
+async function handleMessage(message: Envelope) {
+  // Root span for entire message handling
+  const span = tracer.startSpan('cell.handle_message', {
+    kind: SpanKind.SERVER,
+    attributes: {
+      'cell.name': this.name,
+      'cell.formation': this.formation,
+      'message.type': message.type,
+      'message.from': message.from,
+    }
+  })
+
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      // LLM call span
+      const llmSpan = tracer.startSpan('cell.llm_call', {
+        attributes: {
+          'llm.provider': this.mind.provider,
+          'llm.model': this.mind.model,
+        }
+      })
+      const result = await this.mind.think(input)
+      llmSpan.setAttributes({
+        'llm.input_tokens': result.usage.inputTokens,
+        'llm.output_tokens': result.usage.outputTokens,
+        'llm.cost': result.usage.cost,
+        'llm.latency_ms': result.latencyMs,
+      })
+      llmSpan.end()
+
+      // Tool call spans
+      for (const toolCall of result.toolCalls ?? []) {
+        const toolSpan = tracer.startSpan('cell.tool_call', {
+          attributes: {
+            'tool.name': toolCall.name,
+            'tool.input_size': JSON.stringify(toolCall.input).length,
+          }
+        })
+        const toolResult = await this.executeTool(toolCall)
+        toolSpan.end()
+      }
+
+      span.setStatus({ code: SpanStatusCode.OK })
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message })
+      span.recordException(err)
+    } finally {
+      span.end()
+    }
+  })
+}
+```
+
+### Trace propagation across Cells
+
+When Cell A sends message to Cell B, trace context propagates via NATS headers:
+
+```typescript
+// Sender
+async function sendMessage(to: string, content: string) {
+  const headers = {}
+  propagation.inject(context.active(), headers)  // inject trace context
+
+  await nats.publish(`cell.${namespace}.${to}.inbox`, {
+    content,
+    from: this.name,
+    traceHeaders: headers,   // propagated
+  })
+}
+
+// Receiver
+async function onMessage(message: Envelope) {
+  const parentContext = propagation.extract(context.active(), message.traceHeaders)
+
+  // New span linked to sender's trace
+  const span = tracer.startSpan('cell.handle_message', {
+    kind: SpanKind.SERVER,
+    links: [{ context: parentContext }],
+  })
+  // ...
+}
+```
+
+Result: distributed trace across entire Mission — from architect's first planning thought through developer's code writing to reviewer's feedback.
+
+### Metrics
+
+```typescript
+import { metrics } from '@opentelemetry/api'
+
+const meter = metrics.getMeter('kais-cell')
+
+// Counters
+const llmCallsCounter = meter.createCounter('kais.cell.llm_calls', {
+  description: 'Total LLM calls',
+})
+const tokenCounter = meter.createCounter('kais.cell.tokens', {
+  description: 'Total tokens consumed',
+})
+const costCounter = meter.createCounter('kais.cell.cost', {
+  description: 'Total LLM cost in USD',
+})
+const messageCounter = meter.createCounter('kais.cell.messages', {
+  description: 'Messages sent/received',
+})
+
+// Histograms
+const llmLatency = meter.createHistogram('kais.cell.llm_latency_ms', {
+  description: 'LLM call latency',
+  boundaries: [500, 1000, 2000, 5000, 10000, 30000],
+})
+const toolLatency = meter.createHistogram('kais.cell.tool_latency_ms', {
+  description: 'Tool execution latency',
+})
+
+// Gauges
+const activeCells = meter.createObservableGauge('kais.platform.active_cells', {
+  description: 'Currently running cells',
+})
+const budgetRemaining = meter.createObservableGauge('kais.cell.budget_remaining', {
+  description: 'Remaining budget per cell',
+})
+```
+
+### Collector + backends
+
+```yaml
+# Added to helmfile.yaml
+
+  - name: otel-collector
+    namespace: kais-system
+    chart: open-telemetry/opentelemetry-collector
+    values:
+      - mode: deployment
+        config:
+          receivers:
+            otlp:
+              protocols:
+                grpc: { endpoint: 0.0.0.0:4317 }
+                http: { endpoint: 0.0.0.0:4318 }
+
+          processors:
+            batch:
+              timeout: 5s
+              send_batch_size: 1024
+
+          exporters:
+            # Traces → Jaeger (or Tempo)
+            otlp/jaeger:
+              endpoint: jaeger.kais-system:4317
+              tls: { insecure: true }
+
+            # Metrics → Prometheus
+            prometheus:
+              endpoint: 0.0.0.0:8889
+
+            # Logs → Postgres (reuse existing)
+            # Or Loki for dedicated log aggregation
+
+          service:
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [otlp/jaeger]
+              metrics:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [prometheus]
+
+  - name: jaeger
+    namespace: kais-system
+    chart: jaegertracing/jaeger
+    values:
+      - collector:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        query:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        storage:
+          type: badger          # embedded, no external deps for minikube
+          # Production: elasticsearch or cassandra
+
+  - name: prometheus
+    namespace: kais-system
+    chart: prometheus-community/prometheus
+    values:
+      - server:
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+          retention: 15d
+          persistentVolume:
+            size: 5Gi
+        # Scrape otel-collector metrics endpoint
+        serverFiles:
+          prometheus.yml:
+            scrape_configs:
+              - job_name: otel-collector
+                static_configs:
+                  - targets: ['otel-collector.kais-system:8889']
+              - job_name: kais-operator
+                static_configs:
+                  - targets: ['kais-operator.kais-system:9090']
+
+  - name: grafana
+    namespace: kais-system
+    chart: grafana/grafana
+    values:
+      - adminPassword: kais
+        resources:
+          requests: { memory: 128Mi, cpu: 100m }
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server.kais-system
+                isDefault: true
+              - name: Jaeger
+                type: jaeger
+                url: http://jaeger-query.kais-system:16686
+```
+
+### Pre-built Grafana dashboards
+
+kAIs ships with dashboards as ConfigMaps:
+
+**Dashboard: Platform Overview**
+```
+┌──────────────────────────────────────────────────────┐
+│  Active Cells: 12    Formations: 3    Missions: 1    │
+│  Total Cost Today: $14.23    Budget Remaining: $85.77│
+├──────────────────┬───────────────────────────────────┤
+│ LLM Calls/min    │  Cost by Provider                 │
+│  ▁▃▅▇▆▅▃▅▇█▆▄  │  Anthropic: $12.10 (85%)          │
+│                  │  Ollama: $0.00 (0%)                │
+│                  │  (local models free)               │
+├──────────────────┼───────────────────────────────────┤
+│ Token Usage      │  Mission Success Rate              │
+│  Input:  234K    │  ████████████░░ 85% (7d avg)      │
+│  Output:  45K    │                                    │
+│  Cached: 180K    │  Last 5 missions:                  │
+│  (77% cache hit) │  ✓ ✓ ✗ ✓ ✓                        │
+├──────────────────┴───────────────────────────────────┤
+│ Cell Health                                           │
+│  architect-0   ● Running  $4.23  1.2K tokens/min     │
+│  developer-0   ● Running  $1.87  0.8K tokens/min     │
+│  developer-1   ● Running  $2.01  0.9K tokens/min     │
+│  reviewer-0    ● Idle     $0.45  waiting              │
+│  monitor       ● Running  $0.12  0.1K tokens/min     │
+└──────────────────────────────────────────────────────┘
+```
+
+**Dashboard: Mission Trace**
+```
+┌──────────────────────────────────────────────────────┐
+│ Mission: implement-auth-module                        │
+│ Duration: 4m36s  Cost: $3.42  Status: ✓ Succeeded    │
+├──────────────────────────────────────────────────────┤
+│ Timeline (Gantt)                                      │
+│                                                       │
+│ architect-0  ██████░░░░░░░░░░░░░░░░░░░░░░░ planning  │
+│              ░░░░░░██░░░░░░░░░░░░░░░░░░░░░ delegate  │
+│              ░░░░░░░░░░░░░░░░░░░░░░████░░░ review    │
+│              ░░░░░░░░░░░░░░░░░░░░░░░░░░██ finalize   │
+│ developer-0  ░░░░░░░░████████████░░░░░░░░░ coding    │
+│ developer-1  ░░░░░░░░░████████████░░░░░░░░ coding    │
+│ reviewer-0   ░░░░░░░░░░░░░░░░░░░░██░░░░░░ reviewing │
+│                                                       │
+│ 0m     1m     2m     3m     4m     5m                │
+├──────────────────────────────────────────────────────┤
+│ Message Flow                                          │
+│ architect-0 ──task──→ developer-0                     │
+│ architect-0 ──task──→ developer-1                     │
+│ developer-0 ──done──→ architect-0   (2m12s)           │
+│ developer-1 ──done──→ architect-0   (2m45s)           │
+│ architect-0 ──review→ reviewer-0                      │
+│ reviewer-0  ──pass──→ architect-0   (45s)             │
+├──────────────────────────────────────────────────────┤
+│ Cost Breakdown                                        │
+│ architect-0:  $1.24 (36%) ████████████░░░░░░░░░░░░   │
+│ developer-0:  $0.87 (25%) ████████░░░░░░░░░░░░░░░░   │
+│ developer-1:  $0.91 (27%) █████████░░░░░░░░░░░░░░░   │
+│ reviewer-0:   $0.40 (12%) ████░░░░░░░░░░░░░░░░░░░░   │
+└──────────────────────────────────────────────────────┘
+```
+
+### Alerting via Instinct
+
+Alerts = Instincts that send notifications. No separate alerting system needed:
+
+```yaml
+apiVersion: kais.io/v1
+kind: Instinct
+metadata:
+  name: cost-alert
+spec:
+  watch:
+    resources:
+      - kind: Cell
+  rules:
+    - name: daily-budget-exceeded
+      condition:
+        type: expression
+        expr: |
+          sum(cells.where(c, c.status.costToday)) > platform.budget.dailyLimit * 0.9
+      actions:
+        - type: webhook
+          params:
+            url: "{{ secrets.slack_webhook }}"
+            body: |
+              ⚠️ kAIs daily budget 90% consumed: ${{ totalCost }} / ${{ dailyLimit }}
+              Top spenders: {{ topCells }}
+```
+
+---
+
+## 5.4 — Forgetting policies
+
+Knowledge graph grows indefinitely without pruning. Ritual + Instinct combo:
+
+```yaml
+# Ritual: weekly cleanup
+apiVersion: kais.io/v1
+kind: Ritual
+metadata:
+  name: knowledge-cleanup
+spec:
+  schedule: "0 3 * * 0"    # Sunday 3 AM
+  action:
+    type: knowledge_maintenance
+    operations:
+      - prune:
+          maxAge: 90d                    # facts older than 90 days
+          minConfidence: 0.3             # AND confidence below 0.3
+          excludeTags: [pinned, core]    # never prune these
+      - deduplicate:
+          similarityThreshold: 0.9       # merge facts >90% similar
+      - compact:
+          scope: formation               # merge 5+ similar cell-level facts
+          minOccurrences: 5              # into one formation-level fact
+---
+# Instinct: real-time contradiction handling
+apiVersion: kais.io/v1
+kind: Instinct
+metadata:
+  name: knowledge-contradiction
+spec:
+  watch:
+    events:
+      - type: knowledge.fact_added
+  rules:
+    - name: detect-contradiction
+      condition:
+        type: llm_judge
+        params:
+          provider: ollama
+          model: qwen2.5:32b
+          evaluationInterval: 1m
+          prompt: |
+            New fact: {{ event.payload.content }}
+            Existing related facts: {{ relatedFacts }}
+            Do any of these contradict each other?
+            Respond: {"contradicts": null | "fact-id", "explanation": "..."}
+      actions:
+        - type: invalidate_fact
+          params:
+            factId: "{{ condition.result.contradicts }}"
+            reason: "{{ condition.result.explanation }}"
+        - type: emit_event
+          params:
+            type: knowledge.contradiction_resolved
+```
+
+---
+
+## New CLI commands
+
+```bash
+# Instincts
+kais instinct list
+kais instinct describe budget-guardian
+kais instinct create -f instinct.yaml
+kais instinct disable budget-guardian          # temporary disable
+kais instinct enable budget-guardian
+kais instinct history budget-guardian          # trigger log
+kais instinct test budget-guardian --dry-run   # evaluate rules without acting
+
+# Rituals
+kais ritual list
+kais ritual describe daily-code-review
+kais ritual create -f ritual.yaml
+kais ritual trigger daily-code-review          # force immediate run
+kais ritual suspend daily-code-review
+kais ritual resume daily-code-review
+kais ritual history daily-code-review
+
+# Observability
+kais trace mission implement-auth-module       # open Jaeger trace
+kais metrics                                   # summary of key metrics
+kais dashboard                                 # open Grafana in browser
+kais logs --trace-id abc-123                   # logs correlated by trace
+```
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–4) | 1300m | 1508Mi | Base system |
+| OTel Collector | 100m | 128Mi | Receives and forwards telemetry |
+| Jaeger | 100m | 128Mi | Trace storage + query (badger) |
+| Prometheus | 250m | 256Mi | Metrics storage + query |
+| Grafana | 100m | 128Mi | Dashboards |
+| **New total (base)** | **1850m** | **2148Mi** | ~2 cores, ~2GB |
+
+Recommendation: `minikube start --cpus=4 --memory=12g` (was 10g).
+
+With 10 Cells running: ~3 cores, ~4GB total. Comfortable on 4 CPU / 12GB.
+
+---
+
+## What Phase 5 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Blueprint evolution (genetic algorithms on Blueprints) | 6 |
+| Swarm autoscaler | 6 |
+| Web dashboard (custom, beyond Grafana) | 7 |
+| ClickHouse migration for traces | 7+ |
+| External notification integrations (Slack, email, PagerDuty) | 6+ |
+| Instinct marketplace (shared community Instincts) | 9+ |
+
+---
+
+## Migration from Phase 4
+
+Additive:
+- 2 new CRDs: Instinct, Ritual
+- 2 new controllers: InstinctController, RitualController
+- OpenTelemetry SDK added to cell-runtime and operator
+- 4 new infrastructure components: OTel Collector, Jaeger, Prometheus, Grafana
+- CEL expression evaluator in operator
+- Pre-built Grafana dashboards as ConfigMaps
+- Built-in Instincts (budget-guardian, health-monitor, knowledge-hygiene)
+- New CLI commands
+
+No breaking changes. All Phase 1–4 functionality unchanged. Existing Cell'ы start emitting traces automatically after cell-runtime upgrade.

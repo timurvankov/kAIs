@@ -1,0 +1,674 @@
+# kAIs — Phase 7: Web Dashboard + ClickHouse + Multi-node
+
+**Goal:** Visual management interface. Migration аналитики на ClickHouse для масштаба. Выход за пределы одной машины.
+
+**Depends on:** Phase 6 (Evolution, Swarm)
+
+**Duration estimate:** 3–4 weeks
+
+---
+
+## Зачем Phase 7
+
+Phase 1–6 управляется через CLI. Это мощно, но:
+
+- Нельзя показать стороннему человеку — нужен визуальный интерфейс
+- Grafana хороша для метрик, но не для управления Cell'ами, Missions, Evolutions
+- Postgres traces тормозят на миллионах строк после месяцев активной работы
+- Один minikube node — потолок для серьёзных экспериментов
+
+Phase 7 закрывает эти три проблемы.
+
+---
+
+## 7.1 — Web Dashboard
+
+### Tech stack
+
+```
+Frontend:  React + TypeScript + Tailwind + shadcn/ui
+           Vite for build
+           TanStack Query for data fetching
+           TanStack Router for routing
+           D3.js for topology visualization
+           Recharts for metrics charts
+
+Backend:   kais-api (existing, Phase 1) — extends with dashboard endpoints
+           WebSocket for real-time updates (already exists)
+
+Deployment: Static files served by nginx Pod
+            Or embedded in kais-api via Fastify static plugin
+```
+
+### Page structure
+
+```
+/                           → Platform Overview
+/cells                      → Cell list + management
+/cells/:name                → Cell detail (logs, metrics, knowledge)
+/formations                 → Formation list
+/formations/:name           → Formation detail (topology graph, cell status)
+/missions                   → Mission list + status
+/missions/:name             → Mission detail (timeline, checks, trace)
+/experiments                → Experiment list + results
+/experiments/:name          → Experiment detail (charts, comparisons)
+/evolutions                 → Evolution list + progress
+/evolutions/:name           → Evolution detail (fitness curve, gene importance)
+/blueprints                 → Blueprint catalog
+/blueprints/:name           → Blueprint detail (parameters, usage stats)
+/knowledge                  → Knowledge graph explorer
+/instincts                  → Instinct list + trigger log
+/rituals                    → Ritual list + schedule
+/swarms                     → Swarm autoscaler status
+/settings                   → Platform settings, credentials, budgets
+```
+
+### Key views
+
+**Platform Overview (`/`)**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  kAIs Platform                                    budget: $85/$100│
+│                                                                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐           │
+│  │ 12 Cells │ │3 Formns  │ │ 2 Active │ │ 1 Evolve │           │
+│  │ running  │ │ running  │ │ missions │ │ gen 7/20 │           │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘           │
+│                                                                   │
+│  Cost today ──────────────────────────────────── $14.23          │
+│  ▁▂▃▃▅▇▆▅▃▂▁▂▃▄▅▆▅▃                                            │
+│  6am    9am    12pm   3pm   6pm                                  │
+│                                                                   │
+│  Recent activity                                                  │
+│  14:32 Mission implement-auth ✓ Succeeded ($3.42, 4m36s)        │
+│  14:28 Swarm developer-pool scaled 3→4 (queue depth)            │
+│  14:15 Instinct budget-guardian: switched developer-2 to Haiku  │
+│  14:00 Ritual daily-code-review started                          │
+│  13:45 Evolution optimize-review gen 7 complete (best: 0.82)    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Formation Detail (`/formations/:name`)**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Formation: code-review-team          Status: ● Running         │
+│  Namespace: project-x                 Cells: 4/4 ready          │
+│  Budget: $7.23 / $10.00              Uptime: 2h 14m             │
+│                                                                   │
+│  ┌─── Topology ──────────────────┐  ┌─── Cell Status ─────────┐│
+│  │                               │  │                          ││
+│  │        ┌───────────┐          │  │  ● architect-0   $4.23  ││
+│  │        │architect-0│          │  │    sonnet, 1.2K tok/min  ││
+│  │        └─────┬─────┘          │  │                          ││
+│  │       ╱      │      ╲         │  │  ● developer-0   $1.87  ││
+│  │ ┌─────┐  ┌─────┐  ┌──────┐   │  │    qwen, 0.8K tok/min   ││
+│  │ │dev-0│  │dev-1│  │rev-0 │   │  │                          ││
+│  │ └─────┘  └─────┘  └──────┘   │  │  ● developer-1   $2.01  ││
+│  │                               │  │    qwen, 0.9K tok/min   ││
+│  │  ──→ contract  ──→ report     │  │                          ││
+│  │  ←── deliver   ←── feedback   │  │  ◌ reviewer-0    $0.45  ││
+│  └───────────────────────────────┘  │    sonnet, idle          ││
+│                                      └──────────────────────────┘│
+│  ┌─── Message Flow (live) ──────────────────────────────────────┐│
+│  │ 14:32:05 architect-0 ──task──→ developer-0                   ││
+│  │ 14:32:05 architect-0 ──task──→ developer-1                   ││
+│  │ 14:34:12 developer-0 ──done──→ architect-0                   ││
+│  │ 14:34:45 developer-1 ──done──→ architect-0                   ││
+│  │ 14:35:01 architect-0 ──review→ reviewer-0                    ││
+│  │ ...                                                           ││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  [Send Message] [Scale] [Pause] [Delete] [View Trace in Jaeger] │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Topology graph** — interactive D3.js force-directed graph. Nodes = Cells, edges = routes with protocol labels. Node size = cost, color = status. Edges animate on message send.
+
+**Mission Timeline (`/missions/:name`)**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Mission: implement-auth-module       Status: ✓ Succeeded       │
+│  Duration: 4m36s  Cost: $3.42  Attempt: 1/3                    │
+│                                                                   │
+│  ┌─── Gantt Timeline ──────────────────────────────────────────┐│
+│  │ architect-0  ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░████░██       ││
+│  │ developer-0  ░░░░░░░░████████████░░░░░░░░░░░░░░░░░░░       ││
+│  │ developer-1  ░░░░░░░░░░████████████░░░░░░░░░░░░░░░░░       ││
+│  │ reviewer-0   ░░░░░░░░░░░░░░░░░░░░░░░░██░░░░░░░░░░░░       ││
+│  │              0m     1m     2m     3m     4m     5m          ││
+│  └──────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  ┌─── Completion Checks ───────────────────────────────────────┐│
+│  │  ✓ files-exist      All 4 files present                     ││
+│  │  ✓ tests-pass       12/12 passed                            ││
+│  │  ✓ coverage         87% (required: 80%)                     ││
+│  │  ✓ review           Approved by reviewer-0                  ││
+│  └──────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  ┌─── Cost Breakdown (pie) ─┐ ┌─── Knowledge Extracted ────────┐│
+│  │     architect  36%       │ │ • jose v5 requires explicit    ││
+│  │     dev-0      25%       │ │   algorithm param (0.95)       ││
+│  │     dev-1      27%       │ │ • split auth files for         ││
+│  │     reviewer   12%       │ │   parallel work (0.70)         ││
+│  └──────────────────────────┘ └─────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Evolution Progress (`/evolutions/:name`)**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Evolution: optimize-code-review      Status: ● Running         │
+│  Generation: 7/20  Cost: $67/$200     Evaluations: 84           │
+│                                                                   │
+│  ┌─── Fitness Over Generations ────────────────────────────────┐│
+│  │ 1.0 ┤                                                       ││
+│  │ 0.8 ┤                              ●───●───●                ││
+│  │ 0.6 ┤                 ●───●───●                             ││
+│  │ 0.4 ┤     ●───●───●                          best ──       ││
+│  │ 0.2 ┤ ●                                      avg  ─ ─      ││
+│  │ 0.0 ┼───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───          ││
+│  │       0   1   2   3   4   5   6   7   8   9  10            ││
+│  └──────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  ┌─── Gene Importance ────────┐ ┌─── Current Best ─────────────┐│
+│  │ topology      ████████░░   │ │ topology:      hierarchy     ││
+│  │ dev_count     ██████░░░░   │ │ dev_count:     3             ││
+│  │ reviewer_mod  █████░░░░░   │ │ dev_model:     qwen2.5:32b  ││
+│  │ dev_model     ███░░░░░░░   │ │ reviewer_mod:  sonnet        ││
+│  │ prompt_style  ██░░░░░░░░   │ │ temperature:   0.3           ││
+│  │ temperature   █░░░░░░░░░   │ │ protocol:      contract      ││
+│  └────────────────────────────┘ │ fitness:        0.82          ││
+│                                  └──────────────────────────────┘│
+│                                                                   │
+│  ┌─── Population Scatter (cost vs quality) ────────────────────┐│
+│  │ quality                                                      ││
+│  │ 8 ┤           ●  ★                                          ││
+│  │ 7 ┤        ● ●  ●                        ★ = Pareto front  ││
+│  │ 6 ┤    ★ ●     ●                         ● = individual    ││
+│  │ 5 ┤  ●                                                      ││
+│  │ 4 ┤●                                                        ││
+│  │   ┼───┬───┬───┬───┬───┬───                                  ││
+│  │   $0  $1  $2  $3  $4  $5   cost                             ││
+│  └──────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  [Pause] [Abort] [Save Best as Blueprint] [Export Data]          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Knowledge Explorer (`/knowledge`)**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Knowledge Graph Explorer                                        │
+│                                                                   │
+│  Scope: [Platform ▾] [project-x ▾] [All formations ▾]           │
+│  Search: [jwt authentication_________________] [🔍]              │
+│                                                                   │
+│  ┌─── Graph View ──────────────┐ ┌─── Fact List ───────────────┐│
+│  │                             │ │                              ││
+│  │    (jose)──uses──(jwt)      │ │ 1. jose v5 requires         ││
+│  │      │              │       │ │    explicit algorithm        ││
+│  │    requires       auth      │ │    ⚑ 0.95  📦 mission      ││
+│  │      │              │       │ │    scope: formation          ││
+│  │  (algorithm)    (module)    │ │                              ││
+│  │                     │       │ │ 2. Hierarchy topology 25%   ││
+│  │                  (login)    │ │    faster for code review    ││
+│  │                   / \       │ │    ⚑ 0.90  🔬 experiment   ││
+│  │              (email)(pass)  │ │    scope: platform           ││
+│  │                             │ │                              ││
+│  │  [Zoom] [Filter] [Export]   │ │ 3. Always validate email    ││
+│  └─────────────────────────────┘ │    input in auth endpoints  ││
+│                                   │    ⚑ 0.85  📦 promoted    ││
+│  Stats: 23 facts, 45 relations   │    scope: realm             ││
+│  4 contradictions resolved        └─────────────────────────────┘│
+│                                                                   │
+│  [Add Fact] [Import] [Export] [Run Cleanup]                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Dashboard backend additions to kais-api
+
+```typescript
+// New API endpoints for dashboard
+
+// Aggregated platform stats
+GET /api/v1/dashboard/overview
+// Returns: cell count, formation count, active missions, costs, recent events
+
+// Real-time event stream (SSE or WebSocket)
+WS /api/v1/dashboard/events
+// Streams: all cell events, mission updates, instinct triggers, scaling events
+
+// Topology data for D3 visualization
+GET /api/v1/formations/:name/topology
+// Returns: { nodes: [...], edges: [...], messages: [...] }
+
+// Mission timeline data
+GET /api/v1/missions/:name/timeline
+// Returns: { spans: [...], checks: [...], messages: [...] }
+
+// Evolution fitness data for charts
+GET /api/v1/evolutions/:name/fitness
+// Returns: { generations: [{ best, avg, worst, population }] }
+
+// Knowledge graph data for visualization
+GET /api/v1/knowledge/graph?scope=...&query=...
+// Returns: { nodes: [...], edges: [...] }
+
+// Cell interaction for dashboard (same as CLI exec)
+POST /api/v1/cells/:name/exec
+// Body: { message: "..." }
+```
+
+### Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-dashboard
+  namespace: kais-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: dashboard
+          image: kais-dashboard:latest
+          ports:
+            - containerPort: 3000
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+            limits: { memory: 128Mi, cpu: 100m }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kais-dashboard
+  namespace: kais-system
+spec:
+  type: NodePort            # accessible via minikube service
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: kais-dashboard
+```
+
+```bash
+# Access
+$ minikube service kais-dashboard -n kais-system
+# Opens browser at http://192.168.49.2:3XXXX
+
+# Or via CLI
+$ kais dashboard
+Opening dashboard at http://localhost:3000...
+# (port-forward behind the scenes)
+```
+
+---
+
+## 7.2 — ClickHouse migration
+
+### Why now
+
+After months of active use:
+- `cell_events`: millions of rows, analytical queries slow
+- `experiment_traces`: tens of millions of rows per large experiment
+- `experiment_runs`: hundreds of thousands of rows across evolutions
+
+Postgres handles transactional workload (CRUD on CRDs, current state). ClickHouse handles analytical workload (aggregations, time-series, experiment analysis).
+
+### Architecture: dual-write
+
+```
+Cell/Operator events
+    │
+    ├──→ Postgres (current state, small tables, transactional)
+    │      cells, formations, missions, facts, blueprints
+    │
+    └──→ ClickHouse (analytics, append-only, massive tables)
+           cell_events, experiment_traces, experiment_runs,
+           metrics_history, evolution_evaluations, swarm_events
+```
+
+Events go to NATS first, then two consumers write to Postgres and ClickHouse independently.
+
+### ClickHouse schema
+
+```sql
+-- Cell events (replaces cell_events in Postgres)
+CREATE TABLE cell_events (
+  id UUID,
+  cell_name String,
+  realm String,
+  formation String DEFAULT '',
+  event_type LowCardinality(String),
+  payload String,                    -- JSON as string
+  tokens_in UInt32 DEFAULT 0,
+  tokens_out UInt32 DEFAULT 0,
+  cost Float64 DEFAULT 0,
+  latency_ms UInt32 DEFAULT 0,
+  model LowCardinality(String) DEFAULT '',
+  created_at DateTime64(3) DEFAULT now64()
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (realm, cell_name, created_at)
+TTL created_at + INTERVAL 90 DAY DELETE;
+-- Auto-delete after 90 days
+
+-- Experiment traces (replaces experiment_traces in Postgres)
+CREATE TABLE experiment_traces (
+  id UUID,
+  experiment_id UUID,
+  run_id UUID,
+  cell_name String,
+  event_type LowCardinality(String),
+  payload String,
+  timestamp DateTime64(3)
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (experiment_id, run_id, timestamp);
+
+-- Materialized view: cost per hour per cell
+CREATE MATERIALIZED VIEW cell_cost_hourly
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(hour)
+ORDER BY (realm, cell_name, hour)
+AS SELECT
+  realm,
+  cell_name,
+  toStartOfHour(created_at) as hour,
+  sum(cost) as total_cost,
+  sum(tokens_in) as total_tokens_in,
+  sum(tokens_out) as total_tokens_out,
+  count() as event_count
+FROM cell_events
+GROUP BY realm, cell_name, hour;
+
+-- Materialized view: mission completion stats
+CREATE MATERIALIZED VIEW mission_stats
+ENGINE = AggregatingMergeTree()
+ORDER BY (realm, formation, toYYYYMM(created_at))
+AS SELECT
+  realm,
+  formation,
+  toStartOfMonth(created_at) as month,
+  countState() as total_missions,
+  countIfState(event_type = 'mission.succeeded') as succeeded,
+  avgState(latency_ms) as avg_duration_ms,
+  sumState(cost) as total_cost
+FROM cell_events
+WHERE event_type IN ('mission.succeeded', 'mission.failed')
+GROUP BY realm, formation, month;
+```
+
+### Query examples that kill Postgres but fly on ClickHouse
+
+```sql
+-- "Average LLM latency by model for last 30 days" (millions of rows)
+SELECT
+  model,
+  avg(latency_ms) as avg_latency,
+  quantile(0.95)(latency_ms) as p95_latency,
+  count() as calls
+FROM cell_events
+WHERE event_type = 'llm_call'
+  AND created_at > now() - INTERVAL 30 DAY
+GROUP BY model
+ORDER BY calls DESC;
+-- Postgres: 15-60 seconds
+-- ClickHouse: 50-200ms
+
+-- "Cost trend per formation per week"
+SELECT
+  formation,
+  toStartOfWeek(created_at) as week,
+  sum(cost) as weekly_cost,
+  sum(tokens_in + tokens_out) as weekly_tokens
+FROM cell_events
+WHERE realm = 'project-x'
+  AND created_at > now() - INTERVAL 6 MONTH
+GROUP BY formation, week
+ORDER BY formation, week;
+-- ClickHouse: <100ms even with hundreds of millions of rows
+
+-- "Compare experiment variants across all metrics"
+SELECT
+  run_id,
+  JSONExtractString(payload, 'variant') as variant,
+  avg(JSONExtractFloat(payload, 'completion_time')) as avg_time,
+  avg(JSONExtractFloat(payload, 'code_quality')) as avg_quality,
+  avg(JSONExtractFloat(payload, 'total_cost')) as avg_cost
+FROM experiment_traces
+WHERE experiment_id = '...'
+  AND event_type = 'run.completed'
+GROUP BY run_id, variant;
+```
+
+### ClickHouse deployment
+
+```yaml
+# Added to helmfile.yaml
+  - name: clickhouse
+    namespace: kais-system
+    chart: bitnami/clickhouse
+    values:
+      - shards: 1
+        replicaCount: 1                # single node for minikube
+        auth:
+          username: kais
+          password: kais
+        persistence:
+          size: 20Gi
+        resources:
+          requests: { memory: 512Mi, cpu: 500m }
+          limits: { memory: 1Gi, cpu: "1" }
+```
+
+### Migration strategy
+
+Phase 7 runs dual-write. Postgres keeps recent events (last 7 days) as hot cache for API queries. ClickHouse stores everything for analytics and dashboard.
+
+```typescript
+// Event consumer — writes to both
+nats.subscribe('cell.>', async (event) => {
+  // Postgres: recent events (for API, CLI logs)
+  await postgres.insertEvent(event)
+
+  // ClickHouse: all events (for analytics, dashboard)
+  await clickhouse.insert('cell_events', formatForClickHouse(event))
+})
+
+// Postgres cleanup ritual
+apiVersion: kais.io/v1
+kind: Ritual
+metadata:
+  name: postgres-cleanup
+spec:
+  schedule: "0 4 * * *"    # daily 4 AM
+  action:
+    type: command
+    command: |
+      DELETE FROM cell_events WHERE created_at < now() - interval '7 days';
+      DELETE FROM experiment_traces WHERE timestamp < now() - interval '7 days';
+      VACUUM ANALYZE cell_events;
+```
+
+Dashboard queries switch from Postgres to ClickHouse for anything analytical. Postgres remains source of truth for current state (cells, formations, missions).
+
+---
+
+## 7.3 — Multi-node support
+
+### When single node isn't enough
+
+- 10 parallel experiments × 20 Cells each = 200 Cells = ~20GB RAM
+- Large evolution (population 20, parallel 5) running alongside production Formations
+- Ollama models requiring dedicated GPU nodes
+
+### Architecture: already distributed
+
+kAIs architecture is inherently distributed — no rewrite needed:
+
+```
+NATS:       Already supports clustering. Add nodes: nats --routes=nats://node2:6222
+Postgres:   Single instance sufficient. If needed: Patroni HA or CockroachDB
+ClickHouse: Supports sharding. For now single node fine
+Neo4j:      Single instance. Causal clustering for HA
+K8s:        minikube → multi-node minikube → real cluster
+```
+
+### Multi-node minikube
+
+```bash
+# Easiest upgrade path
+minikube start --nodes=3 --cpus=4 --memory=8g
+# 3 nodes × 4 CPU × 8GB = 12 CPU, 24GB total
+
+# Label nodes for workload separation
+kubectl label nodes minikube          kais.io/role=control-plane
+kubectl label nodes minikube-m02      kais.io/role=worker
+kubectl label nodes minikube-m03      kais.io/role=worker
+```
+
+### Node affinity for workload separation
+
+```yaml
+# kais-operator, kais-api, infra → control plane node
+# Cell Pods → worker nodes
+# Experiment runner → worker nodes
+# Ollama → dedicated node (if GPU available)
+
+# In operator, when creating Cell Pods:
+spec:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kais.io/role
+                operator: In
+                values: [worker]
+  tolerations:
+    - key: kais.io/dedicated
+      operator: Equal
+      value: cells
+      effect: NoSchedule
+```
+
+### NATS clustering
+
+```yaml
+# Updated NATS helm values
+  - name: nats
+    values:
+      - cluster:
+          enabled: true
+          replicas: 3          # one per node
+        jetstream:
+          enabled: true
+          memStorage:
+            enabled: true
+            size: 512Mi
+          fileStorage:
+            enabled: true
+            size: 5Gi
+            storageClassName: standard
+```
+
+Cell Pods connect to any NATS instance — client auto-discovers cluster.
+
+### Real cluster migration path
+
+```
+Phase 1-6:  minikube (1 node, 4 CPU, 8-12GB)
+Phase 7a:   minikube multi-node (3 nodes)
+Phase 7b:   k3s cluster on Hetzner (your existing infra)
+Phase 8+:   Full K8s cluster (EKS/GKE or self-managed)
+```
+
+kAIs Helm charts work unchanged on any K8s cluster. Only changes:
+- StorageClass for PVCs
+- Ingress for external access
+- TLS certificates
+- Resource limits adjusted for node size
+
+---
+
+## New CLI commands
+
+```bash
+# Dashboard
+kais dashboard                        # open in browser
+kais dashboard --port 8080            # custom port
+
+# ClickHouse queries (power user)
+kais analytics query "SELECT model, avg(latency_ms) FROM cell_events GROUP BY model"
+kais analytics cost --realm project-x --period 30d
+kais analytics cost --formation code-review-team --period 7d --breakdown cell
+
+# Node management (multi-node)
+kais nodes list
+# NAME          ROLE           CELLS   CPU    MEMORY   STATUS
+# minikube      control-plane  2       25%    40%      Ready
+# minikube-m02  worker         8       60%    55%      Ready
+# minikube-m03  worker         6       45%    50%      Ready
+
+kais nodes drain minikube-m03           # gracefully move Cells off node
+kais nodes cordon minikube-m03          # prevent new Cells from scheduling
+```
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–6) | 1850m | 2148Mi | Existing system |
+| kais-dashboard | 50m | 64Mi | Static frontend + API |
+| ClickHouse | 500m | 512Mi | Analytics engine |
+| NATS (3 replicas) | 300m | 384Mi | Clustered (+200m/256Mi) |
+| **Total (control plane)** | **2700m** | **3108Mi** | ~3 cores, ~3GB |
+
+**Single node (minikube):** `--cpus=6 --memory=14g` covers base + 15 Cells.
+
+**Multi-node (3 nodes):**
+- Node 1 (control): infra + operator + API + dashboard (4 CPU, 8GB)
+- Node 2 (worker): Cells + experiments (4 CPU, 8GB)
+- Node 3 (worker): Cells + Ollama (4 CPU, 8GB + GPU optional)
+
+---
+
+## What Phase 7 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Recursive ecosystems | 8 |
+| Multi-cluster federation | 9+ |
+| Public Blueprint marketplace | 9+ |
+| User authentication/RBAC in dashboard | 8 |
+| Mobile dashboard | Never (use responsive web) |
+| Electron desktop app | Never (CLI + web sufficient) |
+
+---
+
+## Migration from Phase 6
+
+Additive:
+- 1 new Deployment: kais-dashboard
+- 1 new infrastructure: ClickHouse
+- NATS upgraded to cluster mode (if multi-node)
+- Dual-write consumer for ClickHouse
+- New API endpoints for dashboard
+- Postgres cleanup Ritual
+- Dashboard Helm chart
+- New CLI commands
+
+No breaking changes. Dashboard is optional — CLI continues to work for everything. ClickHouse is optional — Postgres fallback for all queries (just slower on large datasets).

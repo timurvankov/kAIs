@@ -1,0 +1,874 @@
+# kAIs — Phase 4: Knowledge Graph + Blueprints
+
+**Goal:** Cell'ы накапливают знания между миссиями. Успешные конфигурации сохраняются как переиспользуемые шаблоны. Система учится.
+
+**Depends on:** Phase 3 (Experiment Engine, Protocols)
+
+**Duration estimate:** 2–3 weeks
+
+---
+
+## Зачем Phase 4
+
+Phase 1–3: каждая Mission начинается с нуля. Cell'ы не помнят прошлый опыт. Успешную Formation нужно вручную копировать и подставлять в новые задачи.
+
+Phase 4 решает:
+- **Knowledge Graph** — Cell'ы помнят факты, решения, ошибки из прошлых миссий
+- **Blueprint** — параметризуемые шаблоны из проверенных конфигураций
+- Система которая становится лучше с каждым запуском
+
+---
+
+## 4.1 — Knowledge Layer Architecture
+
+### Hierarchical knowledge
+
+```
+Platform Knowledge (shared across all realms)
+│  "TypeScript projects should use strict mode"
+│  "Jest is preferred test framework"
+│
+├── Realm: project-x
+│   │  "project-x uses Fastify, not Express"
+│   │  "Auth module uses jose library"
+│   │
+│   ├── Formation: code-review-team
+│   │   "architect prefers small PRs"
+│   │   "reviewer-0 flags security issues most often"
+│   │
+│   └── Cell: architect-0
+│       "last 3 missions used hierarchy topology"
+│       "developer-1 slower but higher quality than developer-0"
+│
+├── Realm: project-y
+│   ...
+```
+
+Каждый уровень видит свои знания + readonly доступ к уровням выше. Cell видит: свои → Formation → Realm → Platform.
+
+### Knowledge interface (не привязан к Graphiti)
+
+```typescript
+interface KnowledgeStore {
+  // Write
+  addFact(fact: Fact): Promise<string>
+  addRelation(from: string, to: string, relation: RelationType, metadata?: any): Promise<string>
+  invalidateFact(factId: string, reason: string): Promise<void>
+
+  // Read
+  search(query: string, scope: KnowledgeScope, options?: SearchOptions): Promise<Fact[]>
+  getRelated(factId: string, relation?: RelationType): Promise<Fact[]>
+  getHistory(factId: string): Promise<FactVersion[]>
+
+  // Scoped views
+  scopedView(scope: KnowledgeScope): ScopedKnowledgeStore
+}
+
+interface Fact {
+  id: string
+  content: string                    // natural language
+  embedding?: number[]               // for semantic search
+  scope: KnowledgeScope              // platform | realm | formation | cell
+  scopeId: string                    // which realm/formation/cell
+  source: FactSource                 // mission result, user input, inferred
+  confidence: number                 // 0-1
+  validFrom: Date
+  validUntil?: Date                  // null = still valid
+  tags: string[]
+}
+
+interface KnowledgeScope {
+  level: 'platform' | 'realm' | 'formation' | 'cell'
+  realmId?: string
+  formationId?: string
+  cellId?: string
+}
+
+interface SearchOptions {
+  maxResults?: number
+  minConfidence?: number
+  includeInvalidated?: boolean
+  semantic?: boolean                 // use embedding similarity
+  recency?: 'prefer_recent' | 'prefer_established' | 'any'
+}
+```
+
+### Backend: Neo4j + Graphiti (swappable)
+
+```
+┌──────────────────────────┐
+│   KnowledgeStore interface│ ← Cell'ы работают через это
+├──────────────────────────┤
+│   GraphitiAdapter         │ ← implementation detail
+├──────────────────────────┤
+│   Neo4j / FalkorDB        │ ← storage
+└──────────────────────────┘
+```
+
+Graphiti даёт:
+- Temporal model (facts have valid_from/valid_until)
+- Automatic contradiction detection (new fact invalidates old)
+- Hybrid retrieval (semantic + keyword + graph traversal)
+- LLM-based entity/relation extraction
+
+Но Graphiti — **implementation detail**. Если завтра лучше вариант — меняем adapter, не трогаем Cell'ы.
+
+### Selective ingestion (critical for cost)
+
+НЕ ingesting каждое сообщение. Только:
+
+```typescript
+enum IngestTrigger {
+  MISSION_COMPLETED,      // mission results + key decisions
+  MISSION_FAILED,         // what went wrong
+  EXPLICIT_REMEMBER,      // Cell calls remember() tool
+  EXPERIMENT_CONCLUDED,   // best variants, statistical findings
+  USER_INPUT,             // human explicitly adds knowledge
+}
+```
+
+Cost estimate:
+- Graphiti ingestion: ~$0.005/episode (LLM call for extraction)
+- 10 missions/day × 5 facts/mission = 50 episodes/day = $0.25/day
+- vs ingesting every message: 1000 messages/day = $5/day
+
+### Cell tools for knowledge
+
+```typescript
+const knowledgeTools = [
+  {
+    name: 'remember',
+    description: 'Store an important fact, decision, or lesson for future reference',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fact: { type: 'string', description: 'What to remember' },
+        tags: { type: 'array', items: { type: 'string' } },
+        confidence: { type: 'number', description: '0-1, how sure are you' }
+      },
+      required: ['fact']
+    }
+  },
+  {
+    name: 'recall',
+    description: 'Search your knowledge for relevant information',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'What to look for' },
+        scope: {
+          type: 'string',
+          enum: ['mine', 'team', 'project', 'all'],
+          description: 'How wide to search'
+        }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'correct',
+    description: 'Invalidate a previous fact that turned out to be wrong',
+    input_schema: {
+      type: 'object',
+      properties: {
+        factId: { type: 'string' },
+        reason: { type: 'string' }
+      },
+      required: ['factId', 'reason']
+    }
+  }
+]
+```
+
+### Automatic knowledge injection
+
+При старте Cell или Mission — cell-runtime автоматически подтягивает релевантные знания в context:
+
+```typescript
+async function buildCellContext(cell: CellSpec, mission?: MissionSpec): Promise<string> {
+  const knowledge = await knowledgeStore.scopedView({
+    level: 'cell',
+    cellId: cell.metadata.name,
+    realmId: cell.metadata.namespace,
+  })
+
+  // Search for facts relevant to current mission
+  const relevantFacts = await knowledge.search(
+    mission?.objective ?? cell.spec.mind.systemPrompt,
+    { maxResults: 20, minConfidence: 0.5, semantic: true }
+  )
+
+  if (relevantFacts.length === 0) return ''
+
+  return `\n\n## Relevant knowledge from past experience:\n` +
+    relevantFacts.map(f =>
+      `- ${f.content} (confidence: ${f.confidence}, from: ${f.source.type})`
+    ).join('\n')
+}
+```
+
+This gets appended to the system prompt. Cell sees past knowledge as part of its context, naturally.
+
+### Knowledge promotion
+
+When a Mission succeeds, key facts get promoted up the scope hierarchy:
+
+```
+Cell-level fact: "login.ts needs input validation for email field"
+  ↓ Mission succeeds, fact was useful
+Formation-level fact: "Always validate email input in auth endpoints"
+  ↓ Multiple Formations confirm
+Realm-level fact: "Input validation is critical for all user-facing endpoints"
+  ↓ Multiple Realms confirm
+Platform-level fact: "All API endpoints must validate input"
+```
+
+Promotion is automatic but conservative:
+- Fact must appear in 3+ successful missions → promote one level
+- Fact must have confidence > 0.7
+- Contradicting facts block promotion until resolved
+
+```typescript
+async function promoteKnowledge() {
+  // Find cell-level facts referenced in 3+ successful missions
+  const candidates = await db.query(`
+    SELECT f.id, f.content, f.scope_id, COUNT(DISTINCT m.id) as mission_count
+    FROM facts f
+    JOIN fact_references fr ON fr.fact_id = f.id
+    JOIN missions m ON m.id = fr.mission_id AND m.status = 'Succeeded'
+    WHERE f.scope_level = 'cell'
+      AND f.confidence > 0.7
+      AND f.valid_until IS NULL
+    GROUP BY f.id
+    HAVING COUNT(DISTINCT m.id) >= 3
+  `)
+
+  for (const candidate of candidates) {
+    // Check for contradictions at parent scope
+    const contradictions = await knowledgeStore.search(
+      candidate.content,
+      { scope: parentScope(candidate), minConfidence: 0.5 }
+    )
+
+    const hasContradiction = contradictions.some(c =>
+      isContradictory(candidate.content, c.content)  // LLM-based check
+    )
+
+    if (!hasContradiction) {
+      await knowledgeStore.addFact({
+        content: await generalize(candidate.content),  // LLM generalizes
+        scope: parentScope(candidate),
+        source: { type: 'promoted', from: candidate.id },
+        confidence: candidate.confidence * 0.9,  // slight decay on promotion
+      })
+    }
+  }
+}
+```
+
+---
+
+## 4.2 — Blueprint CRD
+
+Blueprint = parameterized template for Formation + Mission. Like Helm Chart but for agent teams.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Blueprint
+metadata:
+  name: code-review-team
+  namespace: kais-blueprints      # shared blueprint namespace
+spec:
+  description: |
+    A code review team with architect, developers, and reviewer.
+    Proven effective for medium-complexity implementation tasks.
+
+  # Template parameters with defaults
+  parameters:
+    - name: language
+      type: string
+      default: typescript
+      description: Programming language
+
+    - name: developer_count
+      type: integer
+      default: 3
+      min: 1
+      max: 10
+
+    - name: model_tier
+      type: enum
+      values: [budget, standard, premium]
+      default: standard
+      description: |
+        budget: Ollama local models
+        standard: Claude Sonnet for leads, Ollama for devs
+        premium: Claude Sonnet everywhere
+
+    - name: topology
+      type: enum
+      values: [hierarchy, star, full_mesh]
+      default: hierarchy
+
+    - name: max_budget
+      type: number
+      default: 10.00
+
+  # Formation template with parameter substitution
+  formation:
+    cells:
+      - name: architect
+        replicas: 1
+        spec:
+          mind:
+            provider: "{{ 'anthropic' if model_tier != 'budget' else 'ollama' }}"
+            model: "{{ 'claude-sonnet-4-20250514' if model_tier != 'budget' else 'qwen2.5:32b' }}"
+            systemPrompt: |
+              You are a senior {{ language }} architect.
+              You break down tasks, coordinate developers, and review designs.
+              {% if language == 'typescript' %}
+              Enforce strict TypeScript, use Zod for validation.
+              {% elif language == 'python' %}
+              Use type hints, prefer pydantic for models.
+              {% endif %}
+          tools:
+            - name: send_message
+            - name: spawn_cell
+            - name: read_file
+            - name: write_file
+            - name: recall
+
+      - name: developer
+        replicas: "{{ developer_count }}"
+        spec:
+          mind:
+            provider: "{{ 'ollama' if model_tier == 'budget' else ('ollama' if model_tier == 'standard' else 'anthropic') }}"
+            model: "{{ 'qwen2.5:32b' if model_tier != 'premium' else 'claude-sonnet-4-20250514' }}"
+            systemPrompt: |
+              You are a {{ language }} developer.
+              Write clean, tested code. Follow the architect's guidance.
+          tools:
+            - name: send_message
+            - name: read_file
+            - name: write_file
+            - name: bash
+            - name: recall
+
+      - name: reviewer
+        replicas: 1
+        spec:
+          mind:
+            provider: "{{ 'anthropic' if model_tier != 'budget' else 'ollama' }}"
+            model: "{{ 'claude-sonnet-4-20250514' if model_tier != 'budget' else 'qwen2.5:32b' }}"
+            systemPrompt: |
+              You review {{ language }} code for correctness, security, and style.
+          tools:
+            - name: send_message
+            - name: read_file
+            - name: recall
+
+    topology:
+      type: "{{ topology }}"
+      root: architect
+
+    budget:
+      maxTotalCost: "{{ max_budget }}"
+
+  # Mission template (optional — user can override)
+  mission:
+    completion:
+      checks:
+        - name: tests-pass
+          type: command
+          command: "{{ 'npm test' if language == 'typescript' else 'pytest' }}"
+      review:
+        enabled: true
+        reviewer: reviewer-0
+      timeout: 30m
+      maxAttempts: 3
+
+  # Metadata from experiments
+  evidence:
+    experiments:
+      - name: topology-comparison
+        finding: "Hierarchy topology 25% faster than full_mesh for this team shape"
+      - name: model-tier-comparison
+        finding: "Standard tier (Sonnet leads + Ollama devs) best cost/quality ratio"
+    successRate: 0.87           # from past missions
+    avgCompletionTime: 284s
+    avgCost: 2.14
+
+status:
+  usageCount: 42
+  lastUsed: "2026-02-20T14:00:00Z"
+  avgSuccessRate: 0.87
+  versions:
+    - version: 1
+      createdAt: "2026-02-01T00:00:00Z"
+    - version: 2
+      createdAt: "2026-02-15T00:00:00Z"
+      changes: "Added reviewer role, switched to hierarchy topology"
+```
+
+### Using a Blueprint
+
+```bash
+# Instantiate with defaults
+$ kais blueprint use code-review-team \
+    --namespace project-x \
+    --mission "Implement user registration API"
+formation.kais.io/code-review-team-inst-1 created
+mission.kais.io/implement-user-registration created
+
+# Instantiate with overrides
+$ kais blueprint use code-review-team \
+    --namespace project-x \
+    --set developer_count=5 \
+    --set model_tier=premium \
+    --set language=python \
+    --mission "Refactor auth module to async"
+
+# List available blueprints
+$ kais blueprint list
+NAME               PARAMS   SUCCESS   AVG COST   USES   AGE
+code-review-team   5        87%       $2.14      42     20d
+data-pipeline      3        92%       $1.87      15     12d
+research-team      4        78%       $3.45      8      5d
+
+# Show blueprint details
+$ kais blueprint describe code-review-team
+Name:         code-review-team
+Description:  A code review team with architect, developers, and reviewer.
+Parameters:
+  language         string   default: typescript
+  developer_count  integer  default: 3 (1-10)
+  model_tier       enum     default: standard [budget|standard|premium]
+  topology         enum     default: hierarchy [hierarchy|star|full_mesh]
+  max_budget       number   default: 10.00
+Evidence:
+  hierarchy topology 25% faster than full_mesh (experiment: topology-comparison)
+  standard tier best cost/quality ratio (experiment: model-tier-comparison)
+Stats:
+  42 uses, 87% success rate, avg $2.14/mission, avg 284s completion
+```
+
+### Blueprint from experiment results
+
+After an experiment concludes, best variant can be saved as Blueprint:
+
+```bash
+$ kais experiment results topology-comparison
+...
+Recommendation: hierarchy with 3 developers, standard model tier
+
+$ kais blueprint create-from-experiment topology-comparison \
+    --name optimized-review-team \
+    --variant "topology=hierarchy,developer_count=3,model_tier=standard"
+blueprint.kais.io/optimized-review-team created (from experiment topology-comparison, variant #7)
+```
+
+System автоматически заполняет `evidence` секцию из результатов эксперимента.
+
+### Blueprint versioning
+
+```typescript
+// Blueprint Controller tracks versions
+async function reconcileBlueprint(blueprint: BlueprintResource) {
+  const current = blueprint.spec
+  const lastVersion = await getLastVersion(blueprint.metadata.name)
+
+  if (!lastVersion || specChanged(current, lastVersion.spec)) {
+    await saveVersion({
+      blueprintId: blueprint.metadata.uid,
+      version: (lastVersion?.version ?? 0) + 1,
+      spec: current,
+      changes: lastVersion ? diffSpecs(lastVersion.spec, current) : 'Initial version',
+    })
+  }
+
+  // Update usage stats from missions that reference this blueprint
+  const missions = await getMissionsUsingBlueprint(blueprint.metadata.name)
+  const succeeded = missions.filter(m => m.status.phase === 'Succeeded')
+
+  blueprint.status.usageCount = missions.length
+  blueprint.status.avgSuccessRate = succeeded.length / missions.length
+}
+```
+
+---
+
+## 4.3 — Infrastructure additions
+
+### Neo4j in cluster
+
+```yaml
+# Added to helmfile.yaml
+  - name: neo4j
+    namespace: kais-system
+    chart: neo4j/neo4j-standalone
+    values:
+      - neo4j:
+          password: kais
+          resources:
+            requests: { memory: 512Mi, cpu: 500m }
+            limits: { memory: 1Gi, cpu: "1" }
+          volume:
+            size: 10Gi
+        # FalkorDB is an alternative — in-memory, faster reads
+        # Can swap later without changing KnowledgeStore interface
+```
+
+### Knowledge service
+
+Dedicated Pod that wraps Graphiti + Neo4j. Cell'ы не обращаются к Neo4j напрямую — через gRPC service.
+
+```
+Cell Pod                    Knowledge Service Pod           Neo4j Pod
+  │                              │                            │
+  │── recall("auth patterns") ──→│                            │
+  │                              │── hybrid search ──────────→│
+  │                              │← nodes + relations ────────│
+  │                              │── rerank (LLM) ──→ LLM    │
+  │←── [fact1, fact2, fact3] ────│                            │
+  │                              │                            │
+  │── remember("always hash") ──→│                            │
+  │                              │── extract entities (LLM) → │
+  │                              │── create nodes ───────────→│
+  │←── ok ───────────────────────│                            │
+```
+
+Why separate service:
+- Single connection pool to Neo4j (not one per Cell)
+- Centralized ingestion queue (batch LLM calls for extraction)
+- Cache layer for frequent queries
+- Graphiti version upgrades don't require Cell image rebuild
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-knowledge
+  namespace: kais-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: knowledge
+          image: kais-knowledge:latest
+          env:
+            - name: NEO4J_URL
+              value: bolt://neo4j.kais-system:7687
+            - name: NATS_URL
+              value: nats://nats.kais-system:4222
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+            limits: { memory: 512Mi, cpu: 500m }
+```
+
+Cell'ы вызывают `recall`/`remember` tools → cell-runtime отправляет request через NATS → knowledge service обрабатывает → возвращает результат.
+
+---
+
+## 4.4 — Automatic post-mission knowledge extraction
+
+When Mission completes (success or failure), system automatically extracts learnings:
+
+```typescript
+async function extractMissionKnowledge(mission: MissionRecord) {
+  // Gather mission context
+  const events = await store.getEvents(mission.id)
+  const decisions = events.filter(e => e.type === 'decision' || e.type === 'tool_use')
+  const errors = events.filter(e => e.type === 'error')
+  const result = mission.status
+
+  // LLM-based extraction (one call, batched)
+  const extraction = await mind.think({
+    systemPrompt: `You extract reusable knowledge from completed missions.
+      Output JSON array of facts with confidence scores.
+      Focus on: decisions that worked, mistakes to avoid, patterns discovered.
+      Be specific and actionable, not generic.`,
+    messages: [{
+      role: 'user',
+      content: `Mission: ${mission.spec.objective}
+        Result: ${result.phase}
+        Key decisions: ${JSON.stringify(decisions.slice(0, 20))}
+        Errors: ${JSON.stringify(errors)}
+        Duration: ${result.duration}s, Cost: $${result.cost}
+
+        Extract 3-7 specific, reusable facts.`
+    }],
+    maxTokens: 1000,
+  })
+
+  const facts: ExtractedFact[] = JSON.parse(extraction.content)
+
+  // Store each fact at appropriate scope
+  for (const fact of facts) {
+    await knowledgeStore.addFact({
+      content: fact.content,
+      scope: {
+        level: 'formation',
+        realmId: mission.namespace,
+        formationId: mission.spec.formationRef,
+      },
+      source: {
+        type: 'mission_extraction',
+        missionId: mission.id,
+        missionResult: result.phase,
+      },
+      confidence: fact.confidence,
+      tags: fact.tags,
+    })
+  }
+}
+```
+
+Example extracted facts from a successful auth module mission:
+
+```
+[
+  {
+    "content": "jose library v5 requires explicit algorithm parameter in jwt.verify(), omitting it causes silent validation bypass",
+    "confidence": 0.95,
+    "tags": ["security", "jwt", "jose"]
+  },
+  {
+    "content": "splitting login and token refresh into separate files reduces review complexity and merge conflicts when 2 developers work in parallel",
+    "confidence": 0.7,
+    "tags": ["architecture", "team-coordination"]
+  },
+  {
+    "content": "running tests after each file commit (not batched at end) catches integration issues 3x faster",
+    "confidence": 0.8,
+    "tags": ["testing", "workflow"]
+  }
+]
+```
+
+From a failed mission:
+
+```
+[
+  {
+    "content": "developer-1 spent 12 minutes implementing bcrypt password hashing before checking that the project already uses argon2 — always check existing dependencies first",
+    "confidence": 0.9,
+    "tags": ["mistake", "dependency-check"]
+  }
+]
+```
+
+---
+
+## 4.5 — Experiment knowledge integration
+
+Experiment results get stored as high-confidence platform-level knowledge:
+
+```typescript
+async function extractExperimentKnowledge(experiment: ExperimentRecord) {
+  const analysis = experiment.status.analysis
+
+  for (const metric of Object.keys(analysis.metrics)) {
+    const best = analysis.metrics[metric].best
+
+    if (best.significantlyBetter) {
+      await knowledgeStore.addFact({
+        content: `For ${describeExperiment(experiment)}: ` +
+                 `${best.variant} is significantly better on ${metric} ` +
+                 `(${best.mean}, p<0.05 vs alternatives)`,
+        scope: { level: 'platform' },
+        source: { type: 'experiment', experimentId: experiment.id },
+        confidence: 0.9,
+        tags: ['experiment-result', metric, ...extractVariableNames(experiment)],
+      })
+    }
+  }
+
+  // Pareto front as knowledge
+  for (const point of analysis.pareto.front) {
+    await knowledgeStore.addFact({
+      content: `Pareto-optimal config: ${describeVariant(point.variant)} ` +
+               `achieves ${describeValues(point.values)}`,
+      scope: { level: 'platform' },
+      source: { type: 'experiment', experimentId: experiment.id },
+      confidence: 0.85,
+      tags: ['pareto-optimal', ...analysis.pareto.metrics],
+    })
+  }
+}
+```
+
+Next time someone creates a Formation, `recall` tool finds: "Experiment X showed hierarchy topology 25% faster for code review teams."
+
+---
+
+## DB schema additions
+
+```sql
+-- Knowledge facts
+CREATE TABLE facts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  content TEXT NOT NULL,
+  embedding vector(1536),          -- pgvector for semantic search
+  scope_level TEXT NOT NULL,        -- platform | realm | formation | cell
+  scope_realm TEXT,
+  scope_formation TEXT,
+  scope_cell TEXT,
+  source_type TEXT NOT NULL,        -- mission_extraction | experiment | user | promoted
+  source_id UUID,
+  confidence NUMERIC NOT NULL DEFAULT 0.5,
+  valid_from TIMESTAMPTZ DEFAULT now(),
+  valid_until TIMESTAMPTZ,          -- null = still valid
+  invalidated_by UUID REFERENCES facts(id),
+  tags TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_facts_scope ON facts(scope_level, scope_realm, scope_formation);
+CREATE INDEX idx_facts_tags ON facts USING gin(tags);
+CREATE INDEX idx_facts_embedding ON facts USING ivfflat(embedding vector_cosine_ops);
+
+-- Fact references (which missions used which facts)
+CREATE TABLE fact_references (
+  fact_id UUID REFERENCES facts(id) ON DELETE CASCADE,
+  mission_id UUID REFERENCES missions(id) ON DELETE CASCADE,
+  used_at TIMESTAMPTZ DEFAULT now(),
+  was_helpful BOOLEAN,              -- post-mission feedback
+  PRIMARY KEY (fact_id, mission_id)
+);
+
+-- Blueprint versions
+CREATE TABLE blueprint_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  blueprint_name TEXT NOT NULL,
+  blueprint_namespace TEXT NOT NULL,
+  version INT NOT NULL,
+  spec JSONB NOT NULL,
+  changes TEXT,
+  experiment_source UUID REFERENCES experiments(id),
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_blueprint_versions ON blueprint_versions(blueprint_name, version DESC);
+
+-- Blueprint usage tracking
+CREATE TABLE blueprint_usage (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  blueprint_name TEXT NOT NULL,
+  formation_id UUID REFERENCES formations(id),
+  mission_id UUID REFERENCES missions(id),
+  parameters JSONB NOT NULL,        -- actual parameter values used
+  outcome TEXT,                     -- succeeded | failed
+  cost NUMERIC,
+  duration_seconds INT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+Note: `vector(1536)` требует pgvector extension. Альтернатива — хранить embeddings в Neo4j (Graphiti делает это автоматически) и использовать Postgres только для метаданных.
+
+---
+
+## New CLI commands
+
+```bash
+# Knowledge
+kais knowledge search "jwt authentication best practices" --scope project-x
+kais knowledge list --scope platform --tags experiment-result
+kais knowledge add "Always use parameterized queries for SQL" --scope platform --confidence 0.95
+kais knowledge invalidate fact-abc-123 --reason "Superseded by new library version"
+kais knowledge stats                    # facts per scope, ingestion rate, storage
+kais knowledge promote                  # run promotion cycle manually
+kais knowledge export --scope project-x --format json > knowledge.json
+kais knowledge import knowledge.json --scope project-y
+
+# Blueprints
+kais blueprint list
+kais blueprint describe code-review-team
+kais blueprint use code-review-team --set developer_count=5 --mission "Build API"
+kais blueprint create-from-experiment topology-comparison --name optimized-team
+kais blueprint create-from-formation code-review-team-inst-1 --name proven-team
+kais blueprint diff code-review-team --v1 1 --v2 2
+kais blueprint history code-review-team
+```
+
+---
+
+## Example: knowledge accumulation over time
+
+```bash
+# Week 1: First mission, no knowledge
+$ kais blueprint use code-review-team --mission "Implement login API"
+# Mission succeeds. Knowledge extracted:
+#   - "jose v5 requires explicit algorithm" (confidence 0.95)
+#   - "split auth files for parallel work" (confidence 0.7)
+
+# Week 2: Second mission, knowledge kicks in
+$ kais blueprint use code-review-team --mission "Implement token refresh"
+# architect-0 starts, system injects relevant knowledge:
+#   "Relevant knowledge from past experience:
+#    - jose v5 requires explicit algorithm parameter (confidence: 0.95)
+#    - split auth files for parallel work (confidence: 0.7)"
+# architect-0 immediately tells developers: "Use explicit algorithm in jose"
+# Mission succeeds faster. New knowledge:
+#   - "refresh tokens should have shorter expiry than access tokens"
+
+# Week 3: Third mission, accumulated knowledge
+$ kais blueprint use code-review-team --mission "Implement password reset"
+# architect-0 now has 5 relevant facts from 2 previous missions
+# Team avoids past mistakes, uses proven patterns
+# Completion time: 40% faster than week 1
+
+# Check knowledge growth
+$ kais knowledge stats --scope project-x
+Scope: project-x
+  Total facts: 23 (18 valid, 5 invalidated)
+  By source: mission_extraction: 15, experiment: 5, user: 3
+  By confidence: high (>0.8): 12, medium (0.5-0.8): 8, low (<0.5): 3
+  Promotions: 3 facts promoted to platform scope
+  Storage: 2.3 MB (Neo4j), 847 embeddings (pgvector)
+```
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1-3) | 550m | 640Mi | Base system |
+| Neo4j | 500m | 512Mi | Knowledge graph storage |
+| kais-knowledge | 250m | 256Mi | Knowledge service |
+| pgvector overhead | — | ~100Mi | Embedding index in Postgres |
+| **New total (base)** | **1300m** | **1508Mi** | Before any Cells |
+
+Recommendation: `minikube start --cpus=4 --memory=10g` (was 8g).
+
+---
+
+## What Phase 4 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Blueprint evolution (genetic algorithms) | 6 |
+| Cross-realm knowledge federation | 8+ |
+| Knowledge graph visualization (web UI) | 7 |
+| Automatic blueprint suggestion ("for this task, use X") | 6 |
+| Knowledge conflict resolution UI | 7 |
+| Forgetting policies (auto-prune old low-confidence facts) | 5 |
+
+---
+
+## Migration from Phase 3
+
+Additive:
+- 1 new CRD: Blueprint
+- 1 new controller: BlueprintController
+- 1 new service: kais-knowledge (Deployment + Service)
+- 1 new infrastructure: Neo4j (Helm chart)
+- Knowledge tools added to cell-runtime (recall, remember, correct)
+- Post-mission extraction hook in MissionController
+- Post-experiment extraction hook in ExperimentController
+- New DB tables + pgvector extension
+- New CLI commands
+
+No breaking changes to Phase 1–3 functionality. Cells without knowledge tools work exactly as before.

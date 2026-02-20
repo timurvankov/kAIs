@@ -1,0 +1,1071 @@
+# kAIs — Phase 9: Marketplace + Human-as-Cell + Multi-cluster + A2A
+
+**Goal:** Из single-user инструмента в платформу. Люди участвуют в Formation'ах как Cell'ы. Blueprint marketplace для sharing. Multi-cluster для масштаба. A2A protocol для межплатформенного взаимодействия.
+
+**Depends on:** Phase 8 (Recursive Ecosystems, RBAC, MCP Gateway)
+
+**Duration estimate:** 4–6 weeks
+
+---
+
+## Зачем Phase 9
+
+Phase 1–8: мощная single-user/small-team платформа. Но:
+
+- Нет способа вставить человека в Formation как полноправного участника — Cell с человеком внутри вместо LLM
+- Лучшие Blueprints живут только у тебя — нет sharing
+- Один K8s кластер — потолок. Нужна федерация
+- kAIs общается только сам с собой — нет стандартного протокола для inter-platform агентов
+
+Phase 9 превращает kAIs из инструмента в **экосистемную платформу**.
+
+---
+
+## 9.1 — Human-as-Cell
+
+### Концепция
+
+Human — это Cell, у которого вместо LLM Mind — человек. Тот же inbox, тот же outbox, те же протоколы. Formation не знает разницы.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Cell
+metadata:
+  name: product-owner
+  namespace: project-x
+spec:
+  mind:
+    provider: human                     # ← new provider type
+    human:
+      userId: timur
+      notifyVia: [dashboard, slack]     # how to notify about incoming messages
+      responseTimeout: 1h               # how long to wait before escalation
+      escalation:
+        action: send_reminder           # remind | reassign_to_llm | skip
+        after: 30m
+  tools: []                             # humans bring their own tools
+  resources:
+    maxTotalCost: 0                     # humans are "free" in LLM cost
+```
+
+### Message flow
+
+```
+architect-0 sends message to product-owner:
+  "Requirements unclear: should bookmark tags be hierarchical or flat?"
+
+1. Message arrives in product-owner NATS inbox
+2. HumanMind adapter detects: this is a human Cell
+3. Notification sent:
+   - Dashboard: notification badge + message in inbox view
+   - Slack: DM via webhook "kAIs needs your input on project-x"
+   - Email: optional
+4. Human sees message in dashboard, types response
+5. Response published to outbox
+6. architect-0 receives response, continues working
+```
+
+### HumanMind adapter
+
+```typescript
+class HumanMind implements Mind {
+  // HumanMind doesn't call an LLM — it bridges to a human
+  async think(input: ThinkInput): Promise<ThinkOutput> {
+    // This is never called directly. Instead, human Cell uses
+    // a different message loop:
+    throw new Error('HumanMind.think() should not be called. Use message bridge.')
+  }
+}
+
+// Human Cell runtime is different from LLM Cell runtime
+class HumanCellRuntime {
+  async start(spec: CellSpec) {
+    const human = spec.spec.mind.human
+
+    // Subscribe to inbox
+    nats.subscribe(`cell.${spec.metadata.namespace}.${spec.metadata.name}.inbox`, async (msg) => {
+      // Store as pending message
+      await store.addPendingHumanMessage({
+        cellName: spec.metadata.name,
+        namespace: spec.metadata.namespace,
+        from: msg.from,
+        content: msg.content,
+        receivedAt: new Date(),
+        timeout: human.responseTimeout,
+      })
+
+      // Send notifications
+      for (const channel of human.notifyVia) {
+        await notify(channel, {
+          userId: human.userId,
+          message: `Message from ${msg.from}: ${truncate(msg.content, 200)}`,
+          actionUrl: `/cells/${spec.metadata.name}/inbox`,
+        })
+      }
+
+      // Schedule escalation
+      scheduleEscalation(spec, msg, human.escalation)
+    })
+  }
+}
+```
+
+### Dashboard inbox view
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Inbox: product-owner                        3 pending messages │
+│                                                                   │
+│  ┌─── From: architect-0 (2 min ago) ──────────── URGENT ───────┐│
+│  │ Requirements unclear: should bookmark tags be hierarchical   ││
+│  │ or flat? This blocks both developer-0 and developer-1.      ││
+│  │                                                               ││
+│  │ Context: Building bookmark CRUD API. Tags used for filtering ││
+│  │ and search. Hierarchical = nested categories (tech/rust/...) ││
+│  │ Flat = just labels.                                           ││
+│  │                                                               ││
+│  │ [Reply: ___________________________________] [Send]           ││
+│  │                                                               ││
+│  │ Quick actions: [Flat tags] [Hierarchical] [Let architect decide]│
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  ┌─── From: qa-team/test-planner (15 min ago) ─────────────────┐│
+│  │ Do we need E2E tests for the MVP or just unit + integration? ││
+│  │ [Reply] [Unit+integration only] [Full E2E] [Defer to QA lead]││
+│  └───────────────────────────────────────────────────────────────┘│
+│                                                                   │
+│  ┌─── From: reviewer-0 (1 hour ago) ── RESPONDED ──────────────┐│
+│  │ Found potential SQL injection in search endpoint. Block merge?││
+│  │ Your response: "Yes, block. Security is non-negotiable."     ││
+│  └───────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Quick actions
+
+Dashboard can pre-generate response options using LLM:
+
+```typescript
+async function generateQuickActions(message: PendingMessage): Promise<QuickAction[]> {
+  const result = await mind.think({
+    model: 'claude-haiku',  // cheap, fast
+    messages: [{
+      role: 'user',
+      content: `An AI agent sent this message to a human team member:
+        "${message.content}"
+        Generate 2-3 likely responses as short labels (max 5 words each).
+        Return JSON array: ["response1", "response2", "response3"]`
+    }]
+  })
+  return JSON.parse(result.content).map(text => ({ label: text, response: text }))
+}
+```
+
+### Escalation
+
+If human doesn't respond within timeout:
+
+```typescript
+async function handleEscalation(spec: CellSpec, message: PendingMessage) {
+  const escalation = spec.spec.mind.human.escalation
+
+  switch (escalation.action) {
+    case 'send_reminder':
+      await notify(spec.spec.mind.human.notifyVia, {
+        userId: spec.spec.mind.human.userId,
+        message: `⏰ Reminder: ${message.from} is waiting for your response (${escalation.after} ago)`,
+        urgent: true,
+      })
+      // Reschedule with longer timeout
+      scheduleEscalation(spec, message, { ...escalation, after: escalation.after * 2 })
+      break
+
+    case 'reassign_to_llm':
+      // Replace human response with LLM response
+      const llmResponse = await fallbackMind.think({
+        messages: [{
+          role: 'user',
+          content: `The human product owner didn't respond in time.
+            Original question: "${message.content}"
+            Make a reasonable default decision and explain your reasoning.`
+        }]
+      })
+      await nats.publish(`cell.${spec.metadata.namespace}.${message.from}.inbox`, {
+        content: `[Auto-response, product-owner unavailable]: ${llmResponse.content}`,
+        from: spec.metadata.name,
+        autoGenerated: true,
+      })
+      break
+
+    case 'skip':
+      await nats.publish(`cell.${spec.metadata.namespace}.${message.from}.inbox`, {
+        content: `[product-owner unavailable, skipping this decision. Proceed with your best judgment.]`,
+        from: spec.metadata.name,
+        autoGenerated: true,
+      })
+      break
+  }
+}
+```
+
+### Hybrid teams
+
+```yaml
+apiVersion: kais.io/v1
+kind: Formation
+metadata:
+  name: hybrid-dev-team
+  namespace: project-x
+spec:
+  cells:
+    - name: product-owner
+      replicas: 1
+      spec:
+        mind:
+          provider: human
+          human:
+            userId: timur
+            notifyVia: [dashboard]
+            responseTimeout: 30m
+            escalation: { action: reassign_to_llm, after: 15m }
+
+    - name: architect
+      replicas: 1
+      spec:
+        mind:
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          systemPrompt: |
+            You are a senior architect. The product-owner is a human —
+            ask them for clarification on requirements when needed.
+            They may take minutes to hours to respond. Plan your work
+            to not block entirely while waiting.
+
+    - name: developer
+      replicas: 3
+      spec:
+        mind:
+          provider: ollama
+          model: qwen2.5:32b
+          systemPrompt: "You are a developer..."
+
+  topology:
+    type: custom
+    routes:
+      - from: architect
+        to: [product-owner, developer]
+      - from: product-owner
+        to: [architect]
+      - from: developer
+        to: [architect]
+```
+
+Architect knows product-owner is human. Asks questions when truly needed, batches them to reduce interruptions, works on other tasks while waiting.
+
+---
+
+## 9.2 — Blueprint Marketplace
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  kAIs Marketplace (hosted service or self-hosted registry)       │
+│                                                                   │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐            │
+│  │ code-review  │ │ data-pipeline│ │ research-    │            │
+│  │ team v3.2    │ │ builder v1.0 │ │ assistant v2 │ ...        │
+│  │ ★★★★☆ (4.2)  │ │ ★★★★★ (4.8)  │ │ ★★★☆☆ (3.4)  │            │
+│  │ 1.2K installs│ │ 340 installs │ │ 89 installs  │            │
+│  │ by: timur    │ │ by: alice    │ │ by: bob      │            │
+│  └──────────────┘ └──────────────┘ └──────────────┘            │
+│                                                                   │
+│  API: GET /blueprints, GET /blueprints/:name, POST /publish     │
+│  Auth: API token per publisher                                   │
+└─────────────────┬───────────────────────────────────────────────┘
+                  │ HTTPS
+┌─────────────────▼───────────────────────────────────────────────┐
+│  Your kAIs instance                                              │
+│  kais blueprint install marketplace/data-pipeline-builder        │
+│  → downloads Blueprint YAML + validates + saves locally          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Blueprint package format
+
+```
+code-review-team-v3.2.kbp            # kAIs Blueprint Package
+├── blueprint.yaml                     # main Blueprint CRD
+├── instincts/                         # bundled Instincts
+│   └── budget-guardian-for-review.yaml
+├── rituals/                           # bundled Rituals
+│   └── post-review-knowledge-extract.yaml
+├── prompts/                           # system prompt templates
+│   ├── architect.md
+│   ├── developer.md
+│   └── reviewer.md
+├── evidence/                          # experiment results backing this config
+│   └── topology-comparison.json
+├── README.md                          # usage guide
+├── CHANGELOG.md
+└── metadata.yaml
+    name: code-review-team
+    version: 3.2.0
+    author: timur
+    license: MIT
+    kais_version: ">=1.0.0"
+    tags: [code-review, development, team]
+    description: "Proven code review team with hierarchy topology"
+    metrics:
+      success_rate: 0.87
+      avg_cost: 2.14
+      avg_duration: 284s
+      tested_on: 42 missions
+```
+
+### Marketplace CLI
+
+```bash
+# Browse
+$ kais marketplace search "code review"
+NAME                    VERSION   RATING   INSTALLS   AUTHOR
+code-review-team        3.2.0     ★4.2     1,247      timur
+quick-pr-review         1.0.0     ★3.8     312        alice
+security-review-team    2.1.0     ★4.5     189        secops-org
+
+$ kais marketplace info code-review-team
+Name:        code-review-team
+Version:     3.2.0
+Author:      timur
+License:     MIT
+Description: Proven code review team with hierarchy topology
+Parameters:  5 (language, developer_count, model_tier, topology, max_budget)
+Evidence:    Tested on 42 missions, 87% success rate, avg $2.14
+Instincts:   1 (budget-guardian-for-review)
+Rituals:     1 (post-review-knowledge-extract)
+Requires:    kAIs >= 1.0.0
+
+# Install
+$ kais marketplace install code-review-team
+Downloading code-review-team v3.2.0...
+Validating blueprint...
+Installing to namespace kais-blueprints...
+✓ Blueprint code-review-team installed
+✓ Instinct budget-guardian-for-review installed
+✓ Ritual post-review-knowledge-extract installed
+
+# Use (same as before)
+$ kais blueprint use code-review-team --mission "Build auth API"
+
+# Publish your own
+$ kais marketplace publish ./my-blueprint/
+Validating package...
+Running security scan...
+Uploading to marketplace...
+✓ Published: my-research-team v1.0.0
+
+# Rate
+$ kais marketplace rate code-review-team --stars 4 --review "Works great for TypeScript projects"
+```
+
+### Marketplace backend
+
+Self-hostable registry. Default: Anthropic-hosted (or community-hosted).
+
+```typescript
+// Simple REST API
+interface MarketplaceAPI {
+  // Browse
+  search(query: string, tags?: string[], sort?: 'popular' | 'rating' | 'recent'): BlueprintListing[]
+  getBlueprint(name: string, version?: string): BlueprintPackage
+  getVersions(name: string): VersionInfo[]
+
+  // Publish
+  publish(package: BlueprintPackage, token: string): void
+  unpublish(name: string, version: string, token: string): void
+
+  // Social
+  rate(name: string, stars: number, review?: string, token: string): void
+  getRatings(name: string): Rating[]
+  getInstallCount(name: string): number
+
+  // Security
+  reportAbuse(name: string, reason: string): void
+}
+```
+
+Security: Blueprints contain only YAML + markdown. No executable code. System prompts are text. Instincts use CEL expressions (sandboxed). No arbitrary code execution from marketplace packages.
+
+### Trust & verification
+
+```yaml
+# metadata.yaml trust section
+trust:
+  # Author verified their identity
+  verified_author: true
+
+  # Blueprint has been tested by the marketplace team
+  marketplace_reviewed: false
+
+  # Automated security checks passed
+  security_scan:
+    passed: true
+    date: "2026-02-15"
+    checks:
+      - no_prompt_injection_patterns: pass
+      - no_excessive_budget_requests: pass
+      - no_external_urls_in_prompts: pass
+      - cel_expressions_safe: pass
+
+  # Community trust signals
+  installs: 1247
+  stars: 4.2
+  reports: 0
+```
+
+---
+
+## 9.3 — Multi-cluster federation
+
+### Problem
+
+Single K8s cluster limits:
+- Geographic latency (Cells near users/data sources)
+- Hardware heterogeneity (GPU nodes for local LLMs in one cluster, CPU in another)
+- Blast radius (cluster failure kills everything)
+- Scale ceiling
+
+### Federation model
+
+```
+┌──────────────────────┐     ┌──────────────────────┐
+│  Cluster: hetzner-eu │     │ Cluster: aws-us      │
+│  (control plane)     │     │ (worker)             │
+│                      │     │                      │
+│  kais-federation ◄───────────► kais-federation     │
+│  controller          │     │  agent               │
+│                      │     │                      │
+│  Cells: architect,   │     │  Cells: gpu-inference │
+│  developers, reviewer│     │  (Ollama on A100)    │
+│  Postgres, NATS,     │     │  NATS (federated)    │
+│  ClickHouse, Neo4j   │     │                      │
+└──────────────────────┘     └──────────────────────┘
+         │                            │
+         └──────── NATS Leafnode ─────┘
+              (cross-cluster messaging)
+```
+
+### NATS Leafnode for cross-cluster messaging
+
+NATS has native Leafnode support — cluster-to-cluster message routing:
+
+```yaml
+# Cluster A: hetzner-eu (hub)
+nats:
+  leafnodes:
+    remotes:
+      - url: nats-leaf://aws-us-nats:7422
+        credentials: /etc/nats/creds/aws-us.creds
+
+# Cluster B: aws-us (leaf)
+nats:
+  leafnodes:
+    port: 7422
+```
+
+Cell in hetzner-eu publishes to `cell.project-x.gpu-worker.inbox` → NATS routes to aws-us automatically. Cell'ы don't know they're in different clusters.
+
+### Federation CRD
+
+```yaml
+apiVersion: kais.io/v1
+kind: Federation
+metadata:
+  name: global
+  namespace: kais-system
+spec:
+  clusters:
+    - name: hetzner-eu
+      role: primary                # control plane lives here
+      endpoint: https://kais.hetzner-eu.internal
+      natsLeafnode: nats-leaf://hetzner-eu:7422
+      capabilities:
+        - cpu
+        - storage
+      labels:
+        region: eu
+        gpu: false
+
+    - name: aws-us
+      role: worker                 # only runs Cells, no control plane
+      endpoint: https://kais.aws-us.internal
+      natsLeafnode: nats-leaf://aws-us:7422
+      capabilities:
+        - gpu
+        - cpu
+      labels:
+        region: us
+        gpu: true
+
+    - name: home-lab
+      role: worker
+      endpoint: https://kais.home.internal
+      natsLeafnode: nats-leaf://home:7422
+      capabilities:
+        - cpu
+      labels:
+        region: local
+        gpu: false
+        cost: free               # no cloud cost
+
+  # Scheduling preferences
+  scheduling:
+    rules:
+      # GPU-requiring Cells → aws-us
+      - match:
+          cellLabel: kais.io/requires-gpu=true
+        prefer:
+          clusterLabel: gpu=true
+
+      # Ollama Cells → home-lab (free compute)
+      - match:
+          mind.provider: ollama
+        prefer:
+          clusterLabel: cost=free
+
+      # Default → hetzner-eu
+      - match: {}
+        prefer:
+          cluster: hetzner-eu
+
+status:
+  clusters:
+    - name: hetzner-eu
+      status: Connected
+      cells: 8
+      lastHeartbeat: "2026-02-20T15:00:00Z"
+    - name: aws-us
+      status: Connected
+      cells: 2
+      lastHeartbeat: "2026-02-20T15:00:01Z"
+    - name: home-lab
+      status: Disconnected
+      lastHeartbeat: "2026-02-20T14:45:00Z"
+      reason: "Network timeout"
+```
+
+### Federation agent
+
+Lightweight agent running on each worker cluster. Reports capacity, receives Cell scheduling requests, manages local Cell Pods.
+
+```typescript
+// Runs on worker clusters
+class FederationAgent {
+  async start() {
+    // Connect to primary cluster's NATS
+    const nats = await connect(this.config.primaryNatsUrl)
+
+    // Report heartbeat
+    setInterval(async () => {
+      await nats.publish('federation.heartbeat', {
+        cluster: this.config.clusterName,
+        capacity: await this.getCapacity(),
+        cells: await this.listLocalCells(),
+      })
+    }, 10000)
+
+    // Listen for scheduling requests
+    nats.subscribe('federation.schedule.' + this.config.clusterName, async (msg) => {
+      // Create Cell Pod locally using local K8s API
+      await this.localK8s.createPod(msg.podSpec)
+      await nats.publish(msg.replyTo, { status: 'scheduled' })
+    })
+
+    // Forward local Cell events to primary
+    nats.subscribe('cell.>', async (msg) => {
+      // Already forwarded via NATS Leafnode, no extra work needed
+    })
+  }
+}
+```
+
+### Cross-cluster Cell scheduling
+
+```typescript
+// In primary cluster's operator
+async function scheduleCell(cell: CellResource): Promise<string> {
+  const federation = await getFederation()
+  if (!federation) {
+    // No federation, schedule locally
+    return 'local'
+  }
+
+  // Evaluate scheduling rules
+  for (const rule of federation.spec.scheduling.rules) {
+    if (matchesRule(cell, rule.match)) {
+      const targetCluster = selectCluster(federation.status.clusters, rule.prefer)
+      if (targetCluster && targetCluster.status === 'Connected') {
+        if (targetCluster.name === federation.spec.clusters[0].name) {
+          return 'local'  // primary cluster
+        }
+        // Schedule on remote cluster
+        await nats.request(`federation.schedule.${targetCluster.name}`, {
+          podSpec: buildCellPod(cell),
+          replyTo: `federation.scheduled.${cell.metadata.uid}`,
+        })
+        return targetCluster.name
+      }
+    }
+  }
+
+  return 'local'  // fallback
+}
+```
+
+---
+
+## 9.4 — A2A Protocol (Agent-to-Agent)
+
+### Что это
+
+Google's Agent-to-Agent protocol — стандарт для взаимодействия агентов разных платформ. kAIs Cell'ы могут общаться с агентами из других систем.
+
+### kAIs as A2A server
+
+```
+External agent (any A2A client)
+    │
+    │  A2A protocol (JSON-RPC over HTTPS)
+    ▼
+┌─────────────────┐
+│ kais-a2a-gateway│
+│                 │──→ creates Mission
+│  /.well-known/  │──→ routes messages to Cells
+│  agent.json     │──→ returns results
+└─────────────────┘
+```
+
+Agent Card (A2A discovery):
+
+```json
+// GET https://kais.example.com/.well-known/agent.json
+{
+  "name": "kAIs Code Review Team",
+  "description": "Multi-agent code review team. Send code, get reviewed.",
+  "url": "https://kais.example.com/a2a",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": true,
+    "stateTransitionHistory": true
+  },
+  "skills": [
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "description": "Review code for bugs, security, style",
+      "inputModes": ["text"],
+      "outputModes": ["text"]
+    },
+    {
+      "id": "implement-feature",
+      "name": "Feature Implementation",
+      "description": "Implement features from requirements",
+      "inputModes": ["text"],
+      "outputModes": ["text", "file"]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}
+```
+
+### kAIs as A2A client
+
+Cell tool for calling external A2A agents:
+
+```typescript
+const callExternalAgentTool = {
+  name: 'call_agent',
+  description: 'Call an external AI agent via A2A protocol',
+  input_schema: {
+    type: 'object',
+    properties: {
+      agentUrl: {
+        type: 'string',
+        description: 'A2A agent URL (e.g., https://other-platform.com/a2a)'
+      },
+      skill: {
+        type: 'string',
+        description: 'Skill ID to invoke'
+      },
+      message: {
+        type: 'string',
+        description: 'Message to send'
+      },
+      waitForResult: {
+        type: 'boolean',
+        default: true,
+        description: 'Wait for completion or fire-and-forget'
+      }
+    },
+    required: ['agentUrl', 'message']
+  }
+}
+```
+
+Example: kAIs Cell delegates translation to external specialized agent:
+
+```
+architect-0 needs documentation translated to Japanese.
+No Japanese specialist in the Formation.
+
+architect-0 calls call_agent({
+  agentUrl: "https://translate-agent.example.com/a2a",
+  skill: "translate",
+  message: "Translate this API documentation to Japanese: [content]",
+  waitForResult: true
+})
+
+→ A2A request to external agent
+← A2A response with translated content
+
+architect-0 saves translation to workspace.
+```
+
+### A2A Gateway deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-a2a-gateway
+  namespace: kais-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: a2a
+          image: kais-a2a-gateway:latest
+          ports:
+            - containerPort: 3002
+          env:
+            - name: KAIS_API_URL
+              value: http://kais-api.kais-system:8080
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kais-a2a
+  namespace: kais-system
+spec:
+  rules:
+    - host: kais.example.com
+      http:
+        paths:
+          - path: /.well-known/agent.json
+            pathType: Exact
+            backend:
+              service: { name: kais-a2a-gateway, port: { number: 3002 } }
+          - path: /a2a
+            pathType: Prefix
+            backend:
+              service: { name: kais-a2a-gateway, port: { number: 3002 } }
+```
+
+---
+
+## 9.5 — Inter-ecosystem communication
+
+Phase 8 gave us recursive trees, but sibling trees can't talk. Phase 9 adds cross-Formation messaging.
+
+```yaml
+apiVersion: kais.io/v1
+kind: Channel
+metadata:
+  name: backend-frontend-sync
+  namespace: project-x
+spec:
+  description: "Coordination channel between backend and frontend teams"
+
+  endpoints:
+    - formation: backend-team
+      cells: [architect]              # only architect can use this channel
+      permissions: [read, write]
+
+    - formation: frontend-team
+      cells: [architect]
+      permissions: [read, write]
+
+    - formation: qa-team
+      cells: [test-planner]
+      permissions: [read]             # read-only, observing
+
+  # Message format enforcement
+  schema:
+    type: object
+    properties:
+      topic:
+        type: string
+        enum: [api_change, schema_change, dependency_update, blocking_issue]
+      content:
+        type: string
+      priority:
+        type: string
+        enum: [low, medium, high, critical]
+    required: [topic, content]
+
+  # Retention
+  history: 100                        # keep last 100 messages
+```
+
+Backed by NATS subject: `channel.project-x.backend-frontend-sync`
+
+New tool for Cells:
+
+```typescript
+const channelTools = [
+  {
+    name: 'post_to_channel',
+    description: 'Post a message to a cross-team coordination channel',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string' },
+        topic: { type: 'string' },
+        content: { type: 'string' },
+        priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] }
+      },
+      required: ['channel', 'content']
+    }
+  },
+  {
+    name: 'read_channel',
+    description: 'Read recent messages from a coordination channel',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string' },
+        limit: { type: 'number', default: 10 },
+        topic: { type: 'string' }
+      },
+      required: ['channel']
+    }
+  }
+]
+```
+
+---
+
+## DB schema additions
+
+```sql
+-- Human Cell pending messages
+CREATE TABLE human_pending_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cell_name TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  from_cell TEXT NOT NULL,
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',    -- pending | responded | escalated | expired
+  response TEXT,
+  received_at TIMESTAMPTZ NOT NULL,
+  responded_at TIMESTAMPTZ,
+  timeout_at TIMESTAMPTZ NOT NULL,
+  escalation_count INT DEFAULT 0
+);
+
+CREATE INDEX idx_human_messages ON human_pending_messages(cell_name, namespace, status);
+
+-- Marketplace (can be separate service, but stored locally for installed blueprints)
+CREATE TABLE installed_blueprints (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  marketplace_name TEXT NOT NULL,
+  version TEXT NOT NULL,
+  package JSONB NOT NULL,                    -- full package content
+  installed_at TIMESTAMPTZ DEFAULT now(),
+  installed_by TEXT,
+  UNIQUE(marketplace_name, version)
+);
+
+-- Blueprint ratings (if self-hosting marketplace)
+CREATE TABLE blueprint_ratings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  blueprint_name TEXT NOT NULL,
+  user_name TEXT NOT NULL,
+  stars INT NOT NULL CHECK (stars BETWEEN 1 AND 5),
+  review TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(blueprint_name, user_name)
+);
+
+-- Federation cluster registry
+CREATE TABLE federation_clusters (
+  name TEXT PRIMARY KEY,
+  role TEXT NOT NULL,                        -- primary | worker
+  endpoint TEXT NOT NULL,
+  capabilities TEXT[] DEFAULT '{}',
+  labels JSONB DEFAULT '{}',
+  status TEXT NOT NULL DEFAULT 'unknown',
+  last_heartbeat TIMESTAMPTZ,
+  cell_count INT DEFAULT 0,
+  capacity JSONB
+);
+
+-- Channels
+CREATE TABLE channels (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  spec JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(name, namespace)
+);
+
+CREATE TABLE channel_messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_name TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  from_cell TEXT NOT NULL,
+  from_formation TEXT,
+  topic TEXT,
+  content TEXT NOT NULL,
+  priority TEXT DEFAULT 'medium',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_channel_messages ON channel_messages(channel_name, namespace, created_at DESC);
+
+-- A2A external agent registry
+CREATE TABLE external_agents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  url TEXT NOT NULL UNIQUE,
+  agent_card JSONB NOT NULL,
+  auth_token_ref TEXT,                       -- K8s secret reference
+  last_checked TIMESTAMPTZ,
+  status TEXT DEFAULT 'active'
+);
+```
+
+---
+
+## New CLI commands
+
+```bash
+# Human-as-Cell
+kais inbox product-owner                      # view pending messages
+kais inbox product-owner --respond msg-001 "Flat tags for MVP"
+kais inbox product-owner --respond-all        # interactive mode
+
+# Marketplace
+kais marketplace search "data pipeline"
+kais marketplace info data-pipeline-builder
+kais marketplace install code-review-team
+kais marketplace install code-review-team --version 2.0.0
+kais marketplace publish ./my-blueprint/
+kais marketplace rate code-review-team --stars 4
+kais marketplace list-installed
+
+# Federation
+kais federation status
+# CLUSTER      ROLE      STATUS       CELLS   LAST HEARTBEAT
+# hetzner-eu   primary   Connected    8       2s ago
+# aws-us       worker    Connected    2       1s ago
+# home-lab     worker    Disconnected 0       15m ago
+
+kais federation add-cluster aws-us --endpoint https://... --role worker
+kais federation remove-cluster home-lab
+kais federation drain aws-us                  # move all Cells off cluster
+
+# Channels
+kais channel list -n project-x
+kais channel messages backend-frontend-sync --tail 20
+kais channel create -f channel.yaml
+
+# A2A
+kais agents list                              # registered external agents
+kais agents discover https://other-platform.com
+# Discovered: "Translation Agent" with skills: translate, summarize
+kais agents register https://other-platform.com --name translator
+kais agents test translator --message "Translate 'hello' to Japanese"
+```
+
+---
+
+## Example: hybrid team with human-in-the-loop
+
+```bash
+$ kais apply -f hybrid-formation.yaml
+formation.kais.io/hybrid-dev-team created
+
+$ kais apply -f mission.yaml
+mission.kais.io/build-bookmark-api created
+
+# architect starts planning, hits ambiguity...
+$ kais events -n project-x -w
+15:00 Cell architect Started planning
+15:02 Cell architect → product-owner: "Should tags be hierarchical or flat?"
+
+# Timur gets Slack notification, opens dashboard
+# Sees message, clicks "Flat tags"
+
+15:05 Cell product-owner → architect: "Flat tags for MVP"
+15:05 Cell architect "Got it. Flat tags. Assigning tasks..."
+15:06 Cell architect → developer-0: "Implement CRUD with flat tags..."
+...
+
+# Later, architect needs another decision but Timur is in a meeting
+15:20 Cell architect → product-owner: "Search: full-text or tag-based?"
+15:35 [Escalation] product-owner: reminder sent (15m timeout)
+15:50 [Escalation] product-owner: reassigning to LLM fallback (30m timeout)
+15:50 Cell product-owner [auto]: "Default to tag-based search for MVP, full-text in v2"
+15:50 Cell architect "Proceeding with tag-based search"
+```
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–8) | 2750m | 3172Mi | Existing system |
+| kais-a2a-gateway | 50m | 64Mi | A2A protocol handler |
+| Federation agent (per worker cluster) | 100m | 128Mi | Lightweight |
+| **Primary cluster total** | **2800m** | **3236Mi** | ~3 cores, ~3GB |
+| **Worker cluster (minimal)** | 200m | 256Mi | Agent + NATS leaf |
+
+---
+
+## What Phase 9 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Self-modifying Cell code (Gödel Agent) | 10+ |
+| Autonomous goal generation | 10+ |
+| Marketplace payment/monetization | 10+ |
+| Cross-platform knowledge federation | 10+ |
+| Natural language Formation builder ("build me a team that...") | 10+ |
+
+---
+
+## Migration from Phase 8
+
+Additive:
+- 1 new CRD: Channel
+- Human provider in Mind abstraction
+- HumanCellRuntime in cell-runtime
+- Dashboard inbox view
+- Marketplace client in CLI + API
+- Federation controller + agent
+- A2A gateway (new Deployment)
+- Channel tools in cell-runtime
+- Notification system (Slack webhook, dashboard badges)
+- New DB tables
+- New CLI commands
+
+No breaking changes. Human-as-Cell is a new `provider: human` — existing LLM Cells unchanged. Federation is opt-in. Marketplace is read-only by default (install only, publish opt-in).

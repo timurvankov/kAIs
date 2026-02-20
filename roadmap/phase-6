@@ -1,0 +1,1061 @@
+# kAIs — Phase 6: Blueprint Evolution + Swarm Autoscaler
+
+**Goal:** Система оптимизирует себя. Генетические алгоритмы на Blueprint'ах — мутация, скрещивание, selection. Автоматическое масштабирование Cell'ов по нагрузке.
+
+**Depends on:** Phase 5 (Instinct, Ritual, Observability)
+
+**Duration estimate:** 2–3 weeks
+
+---
+
+## Зачем Phase 6
+
+Phase 1–5: ты сам проектируешь Formation'ы и запускаешь эксперименты чтобы найти лучшую конфигурацию. Phase 6 — **система делает это сама**.
+
+- **Blueprint Evolution** — "вот задача, вот бюджет, найди лучшую команду". Система генерирует вариации Blueprint'ов, тестирует их, скрещивает лучших, мутирует, повторяет. Через 50 поколений — Blueprint оптимальнее того что ты придумаешь вручную.
+- **Swarm Autoscaler** — Formation сама увеличивает/уменьшает количество Cell'ов на основе очереди задач, стоимости, или custom метрик.
+
+---
+
+## 6.1 — Blueprint Evolution
+
+### Evolution CRD
+
+```yaml
+apiVersion: kais.io/v1
+kind: Evolution
+metadata:
+  name: optimize-code-review
+  namespace: experiments
+spec:
+  # Seed blueprint — starting point for evolution
+  seed:
+    blueprintRef: code-review-team
+    # Or inline seed:
+    # formation: { ... }
+
+  # What can be mutated
+  genome:
+    - gene: topology
+      type: enum
+      values: [hierarchy, star, full_mesh, ring]
+
+    - gene: developer_count
+      type: integer
+      min: 1
+      max: 8
+
+    - gene: developer_model
+      type: enum
+      values:
+        - { provider: ollama, model: "qwen2.5:7b" }
+        - { provider: ollama, model: "qwen2.5:32b" }
+        - { provider: anthropic, model: "claude-haiku-4-5-20251001" }
+        - { provider: anthropic, model: "claude-sonnet-4-20250514" }
+
+    - gene: reviewer_model
+      type: enum
+      values:
+        - { provider: ollama, model: "qwen2.5:32b" }
+        - { provider: anthropic, model: "claude-sonnet-4-20250514" }
+
+    - gene: architect_temperature
+      type: float
+      min: 0.0
+      max: 1.0
+      step: 0.1
+
+    - gene: protocol
+      type: enum
+      values: [free, contract, auction]
+
+    - gene: system_prompt_style
+      type: enum
+      values: [concise, detailed, structured]
+      # Maps to prompt templates
+      templates:
+        concise: "You are a {{ role }}. Be brief and direct."
+        detailed: "You are a {{ role }}. Think step by step, explain your reasoning..."
+        structured: "You are a {{ role }}. Always respond with: 1) Analysis 2) Plan 3) Action"
+
+  # Fitness function — what we're optimizing for
+  fitness:
+    # Multi-objective optimization
+    objectives:
+      - metric: mission_success
+        weight: 0.4
+        direction: maximize       # higher is better
+
+      - metric: code_quality
+        weight: 0.3
+        direction: maximize
+
+      - metric: total_cost
+        weight: 0.2
+        direction: minimize       # lower is better
+
+      - metric: completion_time
+        weight: 0.1
+        direction: minimize
+
+    # How to evaluate each individual
+    evaluation:
+      mission:
+        objective: "Implement a CRUD REST API for a todo list with tests."
+        completion:
+          checks:
+            - name: tests-pass
+              type: command
+              command: npm test
+          timeout: 20m
+      repeats: 3                  # run each individual 3 times for stability
+      runtime: in-process
+
+  # Genetic algorithm parameters
+  algorithm:
+    populationSize: 12            # individuals per generation
+    generations: 20               # max generations
+    selection: tournament          # tournament | roulette | rank
+    tournamentSize: 3
+    crossover:
+      rate: 0.7
+      method: uniform             # uniform | single_point | two_point
+    mutation:
+      rate: 0.2
+      # Per-gene mutation probability
+      geneRates:
+        topology: 0.3             # topology is cheap to test, mutate more
+        developer_model: 0.15
+        developer_count: 0.2
+        architect_temperature: 0.1
+    elitism: 2                    # top N survive unchanged to next generation
+
+  # Stopping criteria (any of these)
+  stopping:
+    maxGenerations: 20
+    fitnessThreshold: 0.95        # stop if fitness > 0.95
+    stagnation: 5                 # stop if no improvement for 5 generations
+    maxCost: 200.00               # total evolution budget
+
+  # What to do with the winner
+  output:
+    saveBlueprint: true           # create Blueprint CRD from best individual
+    blueprintName: evolved-code-review
+    saveTopN: 3                   # save top 3 as separate blueprints
+
+  parallel: 3                     # concurrent evaluations
+
+status:
+  phase: Running
+  generation: 7
+  totalGenerations: 20
+  bestFitness: 0.82
+  bestFitnessHistory: [0.45, 0.52, 0.61, 0.68, 0.74, 0.79, 0.82]
+  totalEvaluations: 84
+  totalCost: 67.30
+  estimatedRemainingCost: 110.40
+  currentPopulation:
+    - id: gen7-ind1
+      genome: { topology: hierarchy, developer_count: 3, developer_model: qwen2.5:32b, ... }
+      fitness: 0.82
+      rank: 1
+    - id: gen7-ind2
+      genome: { topology: hierarchy, developer_count: 4, developer_model: claude-haiku, ... }
+      fitness: 0.79
+      rank: 2
+    # ...
+  stagnationCount: 0
+```
+
+### Evolution Controller
+
+```typescript
+class EvolutionController {
+
+  async reconcileEvolution(evo: EvolutionResource) {
+    switch (evo.status.phase) {
+      case 'Pending':
+        // Initialize first generation
+        const population = this.initializePopulation(evo)
+        await this.saveGeneration(evo.id, 0, population)
+        evo.status.phase = 'Evaluating'
+        evo.status.generation = 0
+        break
+
+      case 'Evaluating':
+        // Check if all individuals in current generation evaluated
+        const gen = await this.getGeneration(evo.id, evo.status.generation)
+        const unevaluated = gen.filter(ind => !ind.fitness)
+        const evaluating = gen.filter(ind => ind.status === 'evaluating')
+
+        // Launch evaluations up to parallel limit
+        while (evaluating.length < evo.spec.parallel && unevaluated.length > 0) {
+          const individual = unevaluated.shift()
+          await this.evaluate(evo, individual)
+          evaluating.push(individual)
+        }
+
+        // All evaluated?
+        if (unevaluated.length === 0 && evaluating.length === 0) {
+          evo.status.phase = 'Evolving'
+        }
+        break
+
+      case 'Evolving':
+        const currentGen = await this.getGeneration(evo.id, evo.status.generation)
+        const bestFitness = Math.max(...currentGen.map(i => i.fitness))
+
+        // Update stats
+        evo.status.bestFitness = bestFitness
+        evo.status.bestFitnessHistory.push(bestFitness)
+
+        // Check stopping criteria
+        if (this.shouldStop(evo)) {
+          evo.status.phase = 'Finalizing'
+          break
+        }
+
+        // Create next generation
+        const nextGen = this.evolve(currentGen, evo.spec.algorithm)
+        evo.status.generation++
+        await this.saveGeneration(evo.id, evo.status.generation, nextGen)
+        evo.status.phase = 'Evaluating'
+        break
+
+      case 'Finalizing':
+        // Save best individuals as Blueprints
+        const allIndividuals = await this.getAllEvaluated(evo.id)
+        const sorted = allIndividuals.sort((a, b) => b.fitness - a.fitness)
+        const topN = sorted.slice(0, evo.spec.output.saveTopN ?? 1)
+
+        for (let i = 0; i < topN.length; i++) {
+          const name = i === 0
+            ? evo.spec.output.blueprintName
+            : `${evo.spec.output.blueprintName}-variant-${i + 1}`
+          await this.createBlueprintFromIndividual(name, topN[i], evo)
+        }
+
+        // Store evolution knowledge
+        await this.extractEvolutionKnowledge(evo, sorted)
+
+        evo.status.phase = 'Completed'
+        break
+    }
+  }
+
+  evolve(population: Individual[], params: AlgorithmSpec): Individual[] {
+    const nextGen: Individual[] = []
+
+    // Elitism — carry over best unchanged
+    const sorted = [...population].sort((a, b) => b.fitness - a.fitness)
+    for (let i = 0; i < params.elitism; i++) {
+      nextGen.push({ ...sorted[i], status: 'pending' })
+    }
+
+    // Fill rest with crossover + mutation
+    while (nextGen.length < params.populationSize) {
+      // Selection
+      const parent1 = this.select(population, params)
+      const parent2 = this.select(population, params)
+
+      // Crossover
+      let child: Genome
+      if (Math.random() < params.crossover.rate) {
+        child = this.crossover(parent1.genome, parent2.genome, params.crossover.method)
+      } else {
+        child = { ...parent1.genome }
+      }
+
+      // Mutation
+      child = this.mutate(child, params.mutation)
+
+      nextGen.push({ genome: child, status: 'pending' })
+    }
+
+    return nextGen
+  }
+
+  select(population: Individual[], params: AlgorithmSpec): Individual {
+    switch (params.selection) {
+      case 'tournament':
+        // Pick K random, return best
+        const contestants = shuffle(population).slice(0, params.tournamentSize)
+        return contestants.reduce((best, c) => c.fitness > best.fitness ? c : best)
+
+      case 'roulette':
+        // Probability proportional to fitness
+        const totalFitness = population.reduce((sum, i) => sum + i.fitness, 0)
+        let r = Math.random() * totalFitness
+        for (const ind of population) {
+          r -= ind.fitness
+          if (r <= 0) return ind
+        }
+        return population[population.length - 1]
+
+      case 'rank':
+        // Probability proportional to rank
+        const ranked = [...population].sort((a, b) => a.fitness - b.fitness)
+        const totalRank = ranked.length * (ranked.length + 1) / 2
+        let rr = Math.random() * totalRank
+        for (let i = 0; i < ranked.length; i++) {
+          rr -= (i + 1)
+          if (rr <= 0) return ranked[i]
+        }
+        return ranked[ranked.length - 1]
+    }
+  }
+
+  crossover(a: Genome, b: Genome, method: string): Genome {
+    const genes = Object.keys(a)
+    const child: Genome = {}
+
+    switch (method) {
+      case 'uniform':
+        // Each gene randomly from parent A or B
+        for (const gene of genes) {
+          child[gene] = Math.random() < 0.5 ? a[gene] : b[gene]
+        }
+        break
+
+      case 'single_point':
+        const point = Math.floor(Math.random() * genes.length)
+        for (let i = 0; i < genes.length; i++) {
+          child[genes[i]] = i < point ? a[genes[i]] : b[genes[i]]
+        }
+        break
+    }
+
+    return child
+  }
+
+  mutate(genome: Genome, params: MutationSpec): Genome {
+    const mutated = { ...genome }
+
+    for (const [gene, value] of Object.entries(mutated)) {
+      const rate = params.geneRates?.[gene] ?? params.rate
+      if (Math.random() > rate) continue
+
+      const geneDef = this.getGeneDef(gene)
+      switch (geneDef.type) {
+        case 'enum':
+          // Random different value
+          const others = geneDef.values.filter(v => JSON.stringify(v) !== JSON.stringify(value))
+          mutated[gene] = others[Math.floor(Math.random() * others.length)]
+          break
+
+        case 'integer':
+          // Gaussian perturbation, clamped
+          const delta = Math.round(gaussianRandom() * (geneDef.max - geneDef.min) * 0.2)
+          mutated[gene] = clamp(value + delta, geneDef.min, geneDef.max)
+          break
+
+        case 'float':
+          const fdelta = gaussianRandom() * (geneDef.max - geneDef.min) * 0.2
+          mutated[gene] = clamp(value + fdelta, geneDef.min, geneDef.max)
+          if (geneDef.step) {
+            mutated[gene] = Math.round(mutated[gene] / geneDef.step) * geneDef.step
+          }
+          break
+      }
+    }
+
+    return mutated
+  }
+
+  // Evaluate one individual: instantiate Formation, run Mission, compute fitness
+  async evaluate(evo: EvolutionResource, individual: Individual) {
+    const formation = this.genomeToFormation(individual.genome, evo.spec.seed)
+    const results: EvalResult[] = []
+
+    for (let i = 0; i < evo.spec.fitness.evaluation.repeats; i++) {
+      const result = await this.runEvaluation(formation, evo.spec.fitness.evaluation, {
+        runtime: evo.spec.fitness.evaluation.runtime ?? 'in-process',
+      })
+      results.push(result)
+    }
+
+    // Compute weighted fitness
+    individual.fitness = this.computeFitness(results, evo.spec.fitness.objectives)
+    individual.metrics = this.aggregateMetrics(results)
+    individual.status = 'evaluated'
+  }
+
+  computeFitness(results: EvalResult[], objectives: Objective[]): number {
+    let fitness = 0
+
+    for (const obj of objectives) {
+      const values = results.map(r => r.metrics[obj.metric]).filter(v => v != null)
+      if (values.length === 0) continue
+
+      const mean = values.reduce((a, b) => a + b, 0) / values.length
+
+      // Normalize to 0-1 range
+      let normalized: number
+      switch (obj.metric) {
+        case 'mission_success':
+          normalized = mean  // already 0 or 1
+          break
+        case 'code_quality':
+          normalized = mean / 10  // 0-10 scale
+          break
+        case 'total_cost':
+          normalized = 1 - Math.min(mean / 10, 1)  // $0=1.0, $10+=0.0
+          break
+        case 'completion_time':
+          normalized = 1 - Math.min(mean / 1800, 1)  // 0s=1.0, 30min+=0.0
+          break
+        default:
+          normalized = mean
+      }
+
+      if (obj.direction === 'minimize') {
+        normalized = 1 - normalized
+      }
+
+      fitness += normalized * obj.weight
+    }
+
+    return fitness
+  }
+}
+```
+
+### Evolution knowledge extraction
+
+After evolution completes, key findings stored as platform knowledge:
+
+```typescript
+async function extractEvolutionKnowledge(evo: EvolutionResource, sorted: Individual[]) {
+  const best = sorted[0]
+  const worst = sorted[sorted.length - 1]
+
+  // Gene importance analysis
+  const geneImportance = analyzeGeneImportance(sorted, evo.spec.genome)
+
+  for (const [gene, importance] of Object.entries(geneImportance)) {
+    if (importance.significant) {
+      await knowledgeStore.addFact({
+        content: `Evolution "${evo.metadata.name}": ${gene} significantly affects fitness. ` +
+                 `Best value: ${importance.bestValue}. ` +
+                 `Effect size: ${importance.effectSize.toFixed(2)}.`,
+        scope: { level: 'platform' },
+        source: { type: 'evolution', evolutionId: evo.metadata.uid },
+        confidence: 0.9,
+        tags: ['evolution', gene, evo.metadata.name],
+      })
+    }
+  }
+
+  // Best configuration
+  await knowledgeStore.addFact({
+    content: `Evolution "${evo.metadata.name}" found optimal config: ` +
+             `${describeGenome(best.genome)}. ` +
+             `Fitness: ${best.fitness.toFixed(3)}, ` +
+             `${evo.status.generation} generations, ${evo.status.totalEvaluations} evaluations.`,
+    scope: { level: 'platform' },
+    source: { type: 'evolution', evolutionId: evo.metadata.uid },
+    confidence: 0.95,
+    tags: ['evolution', 'best-config'],
+  })
+}
+
+// Analyze which genes matter most for fitness
+function analyzeGeneImportance(individuals: Individual[], genome: GeneDef[]): GeneImportance {
+  const result: Record<string, any> = {}
+
+  for (const gene of genome) {
+    // Group individuals by gene value
+    const groups: Record<string, number[]> = {}
+    for (const ind of individuals) {
+      const key = JSON.stringify(ind.genome[gene.name])
+      if (!groups[key]) groups[key] = []
+      groups[key].push(ind.fitness)
+    }
+
+    // ANOVA-style: is there significant variance between groups?
+    const groupMeans = Object.values(groups).map(g => mean(g))
+    const overallMean = mean(individuals.map(i => i.fitness))
+    const betweenVariance = mean(groupMeans.map(m => (m - overallMean) ** 2))
+    const withinVariance = mean(Object.values(groups).map(g => variance(g)))
+
+    const fStatistic = betweenVariance / (withinVariance || 0.001)
+
+    // Find best value
+    const bestGroup = Object.entries(groups)
+      .sort(([, a], [, b]) => mean(b) - mean(a))[0]
+
+    result[gene.name] = {
+      significant: fStatistic > 3.0,  // rough threshold
+      fStatistic,
+      effectSize: betweenVariance / (betweenVariance + withinVariance),
+      bestValue: JSON.parse(bestGroup[0]),
+      bestMeanFitness: mean(bestGroup[1]),
+    }
+  }
+
+  return result
+}
+```
+
+---
+
+## 6.2 — Swarm Autoscaler
+
+### Swarm CRD
+
+```yaml
+apiVersion: kais.io/v1
+kind: Swarm
+metadata:
+  name: developer-pool
+  namespace: project-x
+spec:
+  # Which Formation and Cell template to scale
+  formationRef: code-review-team
+  cellTemplate: developer                # scale "developer" cells within this Formation
+
+  # Scaling bounds
+  minReplicas: 1
+  maxReplicas: 10
+
+  # Scaling triggers (any of these can trigger scale)
+  triggers:
+    - type: queue_depth
+      params:
+        # How many unprocessed messages in cell inboxes
+        subject: "cell.project-x.architect-0.outbox"
+        # Scale up when architect has >5 pending tasks for developers
+        targetValue: 3
+        # Messages older than this count as "pending"
+        maxAge: 2m
+
+    - type: metric
+      params:
+        # Prometheus query
+        query: |
+          avg(kais_cell_llm_latency_ms{formation="code-review-team", cell_template="developer"})
+        targetValue: 5000              # if avg latency > 5s, scale up
+        # (more cells = less work per cell = faster individual response)
+
+    - type: budget_efficiency
+      params:
+        # Scale down if cost per task is too high
+        # (too many idle developers wasting budget on context maintenance)
+        maxCostPerTask: 0.50
+        window: 10m
+
+    - type: schedule
+      params:
+        # Pre-scale for known busy periods
+        windows:
+          - cron: "0 9 * * 1-5"       # 9 AM weekdays
+            replicas: 5
+            duration: 2h
+          - cron: "0 0 * * *"          # midnight
+            replicas: 1
+            duration: 8h
+
+  # Scaling behavior
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60   # wait 60s before scaling up
+      step: 2                          # add max 2 cells at a time
+      cooldownSeconds: 120             # wait 2min between scale-ups
+
+    scaleDown:
+      stabilizationWindowSeconds: 300  # wait 5min before scaling down (conservative)
+      step: 1                          # remove 1 at a time
+      cooldownSeconds: 300
+      # Graceful: finish current task before killing
+      terminationGracePeriodSeconds: 120
+
+  # Budget awareness
+  budget:
+    respectFormationBudget: true       # don't scale beyond Formation budget
+    maxCostPerHour: 5.00               # independent cap
+
+status:
+  currentReplicas: 3
+  desiredReplicas: 4
+  lastScaleTime: "2026-02-20T14:30:00Z"
+  lastScaleDirection: up
+  triggers:
+    - type: queue_depth
+      currentValue: 7
+      targetValue: 3
+      recommendation: 5              # recommended replicas based on this trigger
+    - type: metric
+      currentValue: 3200
+      targetValue: 5000
+      recommendation: 3
+    - type: budget_efficiency
+      currentValue: 0.35
+      targetValue: 0.50
+      recommendation: 3
+  conditions:
+    - type: ScalingActive
+      status: "True"
+    - type: AbleToScale
+      status: "True"
+    - type: BudgetAvailable
+      status: "True"
+```
+
+### Swarm Controller
+
+```typescript
+class SwarmController {
+
+  async reconcileSwarm(swarm: SwarmResource) {
+    const formation = await k8s.getFormation(swarm.spec.formationRef, swarm.metadata.namespace)
+    const currentReplicas = this.getCurrentReplicas(formation, swarm.spec.cellTemplate)
+
+    // Evaluate all triggers
+    const recommendations: number[] = []
+
+    for (const trigger of swarm.spec.triggers) {
+      const rec = await this.evaluateTrigger(trigger, swarm, formation)
+      swarm.status.triggers.push({
+        type: trigger.type,
+        currentValue: rec.currentValue,
+        targetValue: rec.targetValue,
+        recommendation: rec.replicas,
+      })
+      recommendations.push(rec.replicas)
+    }
+
+    // Take maximum recommendation (scale to satisfy all triggers)
+    let desired = Math.max(...recommendations)
+
+    // Clamp to bounds
+    desired = clamp(desired, swarm.spec.minReplicas, swarm.spec.maxReplicas)
+
+    // Budget check
+    if (swarm.spec.budget.respectFormationBudget) {
+      const budgetRemaining = formation.spec.budget.maxTotalCost - formation.status.totalCost
+      const costPerCell = this.estimateCostPerCell(formation, swarm.spec.cellTemplate)
+      const maxAffordable = currentReplicas + Math.floor(budgetRemaining / costPerCell)
+      desired = Math.min(desired, maxAffordable)
+    }
+
+    if (swarm.spec.budget.maxCostPerHour) {
+      const currentCostRate = this.getCurrentCostRate(formation, swarm.spec.cellTemplate)
+      const costPerNewCell = currentCostRate / currentReplicas
+      const maxForHourlyCap = Math.floor(swarm.spec.budget.maxCostPerHour / costPerNewCell)
+      desired = Math.min(desired, maxForHourlyCap)
+    }
+
+    swarm.status.desiredReplicas = desired
+
+    // Apply scaling with behavior constraints
+    if (desired > currentReplicas) {
+      await this.scaleUp(swarm, formation, currentReplicas, desired)
+    } else if (desired < currentReplicas) {
+      await this.scaleDown(swarm, formation, currentReplicas, desired)
+    }
+  }
+
+  async scaleUp(swarm: SwarmResource, formation: FormationResource, current: number, desired: number) {
+    const behavior = swarm.spec.behavior.scaleUp
+    const timeSinceLastScale = Date.now() - new Date(swarm.status.lastScaleTime).getTime()
+
+    // Cooldown check
+    if (timeSinceLastScale < behavior.cooldownSeconds * 1000) return
+
+    // Stabilization: desired must be consistently higher for stabilization window
+    if (!this.isStabilized(swarm, 'up', behavior.stabilizationWindowSeconds)) return
+
+    // Step limit
+    const actualIncrease = Math.min(desired - current, behavior.step)
+    const newReplicas = current + actualIncrease
+
+    // Update Formation cell template replicas
+    await this.updateFormationReplicas(formation, swarm.spec.cellTemplate, newReplicas)
+
+    swarm.status.lastScaleTime = new Date().toISOString()
+    swarm.status.lastScaleDirection = 'up'
+    swarm.status.currentReplicas = newReplicas
+
+    emitEvent('SwarmScaleUp', swarm, `Scaled ${swarm.spec.cellTemplate} from ${current} to ${newReplicas}`)
+  }
+
+  async scaleDown(swarm: SwarmResource, formation: FormationResource, current: number, desired: number) {
+    const behavior = swarm.spec.behavior.scaleDown
+    const timeSinceLastScale = Date.now() - new Date(swarm.status.lastScaleTime).getTime()
+
+    if (timeSinceLastScale < behavior.cooldownSeconds * 1000) return
+    if (!this.isStabilized(swarm, 'down', behavior.stabilizationWindowSeconds)) return
+
+    const actualDecrease = Math.min(current - desired, behavior.step)
+    const newReplicas = current - actualDecrease
+
+    // Graceful: mark cells for termination, let them finish current work
+    const cellsToRemove = await this.selectCellsForTermination(
+      formation, swarm.spec.cellTemplate, actualDecrease
+    )
+
+    for (const cell of cellsToRemove) {
+      // Send graceful shutdown signal
+      await nats.publish(`cell.${cell.namespace}.${cell.name}.control`, {
+        type: 'drain',
+        gracePeriodMs: behavior.terminationGracePeriodSeconds * 1000,
+        message: 'Scaling down. Finish current task and shut down.',
+      })
+    }
+
+    // Actual deletion happens after grace period (or immediately if cell is idle)
+    // Cell-runtime handles drain: finish current LLM call, send results, then exit
+
+    swarm.status.lastScaleTime = new Date().toISOString()
+    swarm.status.lastScaleDirection = 'down'
+
+    emitEvent('SwarmScaleDown', swarm, `Scaling ${swarm.spec.cellTemplate} from ${current} to ${newReplicas}`)
+  }
+
+  // Select which cells to kill — prefer idle, then least cost-efficient
+  async selectCellsForTermination(
+    formation: FormationResource, template: string, count: number
+  ): Promise<CellResource[]> {
+    const cells = await k8s.listCells({
+      namespace: formation.metadata.namespace,
+      labelSelector: `kais.io/formation=${formation.metadata.name},kais.io/template=${template}`,
+    })
+
+    // Sort: idle first, then by ascending cost-efficiency
+    const ranked = cells.sort((a, b) => {
+      const aIdle = a.status.lastActive ? Date.now() - new Date(a.status.lastActive).getTime() : Infinity
+      const bIdle = b.status.lastActive ? Date.now() - new Date(b.status.lastActive).getTime() : Infinity
+      // More idle time = higher priority for removal
+      return bIdle - aIdle
+    })
+
+    return ranked.slice(0, count)
+  }
+
+  async evaluateTrigger(trigger: Trigger, swarm: SwarmResource, formation: FormationResource) {
+    switch (trigger.type) {
+      case 'queue_depth': {
+        const depth = await this.getQueueDepth(trigger.params.subject, trigger.params.maxAge)
+        const current = this.getCurrentReplicas(formation, swarm.spec.cellTemplate)
+        // Simple proportional: if queue is 2x target, double cells
+        const ratio = depth / trigger.params.targetValue
+        return {
+          currentValue: depth,
+          targetValue: trigger.params.targetValue,
+          replicas: Math.ceil(current * ratio),
+        }
+      }
+
+      case 'metric': {
+        const value = await this.queryPrometheus(trigger.params.query)
+        const current = this.getCurrentReplicas(formation, swarm.spec.cellTemplate)
+        const ratio = value / trigger.params.targetValue
+        return {
+          currentValue: value,
+          targetValue: trigger.params.targetValue,
+          replicas: Math.ceil(current * ratio),
+        }
+      }
+
+      case 'budget_efficiency': {
+        const costPerTask = await this.getCostPerTask(formation, swarm.spec.cellTemplate, trigger.params.window)
+        const current = this.getCurrentReplicas(formation, swarm.spec.cellTemplate)
+        // If cost per task too high, scale down
+        if (costPerTask > trigger.params.maxCostPerTask) {
+          return { currentValue: costPerTask, targetValue: trigger.params.maxCostPerTask, replicas: current - 1 }
+        }
+        return { currentValue: costPerTask, targetValue: trigger.params.maxCostPerTask, replicas: current }
+      }
+
+      case 'schedule': {
+        const now = new Date()
+        for (const window of trigger.params.windows) {
+          if (isInCronWindow(now, window.cron, window.duration)) {
+            return { currentValue: 0, targetValue: 0, replicas: window.replicas }
+          }
+        }
+        return { currentValue: 0, targetValue: 0, replicas: swarm.spec.minReplicas }
+      }
+    }
+  }
+}
+```
+
+### Graceful drain in cell-runtime
+
+```typescript
+// cell-runtime handles drain signal
+nats.subscribe(`cell.${namespace}.${name}.control`, async (msg) => {
+  if (msg.type === 'drain') {
+    this.draining = true
+
+    // If idle, exit immediately
+    if (!this.currentTask) {
+      await this.shutdown()
+      return
+    }
+
+    // If busy, finish current task then exit
+    // Set a hard deadline
+    setTimeout(() => {
+      this.shutdown()  // force after grace period
+    }, msg.gracePeriodMs)
+  }
+})
+
+// In main loop
+async function handleMessage(message: Envelope) {
+  if (this.draining) {
+    // Reject new messages
+    await nats.publish(message.replyTo, {
+      error: 'Cell is draining, reassign this message',
+      code: 'CELL_DRAINING',
+    })
+    return
+  }
+
+  this.currentTask = message
+  // ... process ...
+  this.currentTask = null
+
+  if (this.draining) {
+    await this.shutdown()
+  }
+}
+```
+
+---
+
+## 6.3 — Blueprint suggestion
+
+When user creates a Mission without specifying a Formation, system suggests Blueprints:
+
+```bash
+$ kais apply -f mission-only.yaml
+# mission-only.yaml has no formationRef
+
+⚠ Mission "build-auth-api" has no Formation.
+  Based on the objective, these Blueprints may fit:
+
+  1. evolved-code-review (fitness: 0.82, 87% success, avg $2.14)
+     Match: "REST API" + "tests" + "TypeScript" → code review team
+  2. research-team (78% success, avg $3.45)
+     Match: "implementation" → less relevant
+
+  Use: kais blueprint use evolved-code-review --mission build-auth-api
+  Or:  kais apply -f mission-only.yaml --blueprint evolved-code-review
+```
+
+Implementation: semantic search over Blueprint descriptions + objective keywords.
+
+---
+
+## DB schema additions
+
+```sql
+-- Evolution tracking
+CREATE TABLE evolutions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT 'default',
+  spec JSONB NOT NULL,
+  status JSONB NOT NULL DEFAULT '{"phase": "Pending"}',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(name, namespace)
+);
+
+CREATE TABLE evolution_generations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  evolution_id UUID REFERENCES evolutions(id) ON DELETE CASCADE,
+  generation INT NOT NULL,
+  population JSONB NOT NULL,         -- array of individuals with genomes + fitness
+  best_fitness NUMERIC,
+  avg_fitness NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_evo_gen ON evolution_generations(evolution_id, generation);
+
+CREATE TABLE evolution_evaluations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  evolution_id UUID REFERENCES evolutions(id) ON DELETE CASCADE,
+  generation INT NOT NULL,
+  individual_index INT NOT NULL,
+  genome JSONB NOT NULL,
+  metrics JSONB,
+  fitness NUMERIC,
+  run_ids UUID[],                    -- references to experiment_runs
+  status TEXT DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Swarm scaling history
+CREATE TABLE swarm_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  swarm_name TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  event_type TEXT NOT NULL,          -- scale_up | scale_down | budget_block
+  from_replicas INT,
+  to_replicas INT,
+  trigger_type TEXT,
+  trigger_value NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_swarm_events ON swarm_events(swarm_name, namespace, created_at DESC);
+```
+
+---
+
+## New CLI commands
+
+```bash
+# Evolution
+kais evolve run optimize-code-review.yaml
+kais evolve status optimize-code-review
+kais evolve status optimize-code-review --watch
+# Live output:
+# Generation 7/20 | Best: 0.82 | Evaluating: gen7-ind5 | Cost: $67/$200
+# Fitness: ▁▂▃▄▅▅▆▇ (trending up)
+
+kais evolve results optimize-code-review
+kais evolve abort optimize-code-review
+kais evolve resume optimize-code-review       # continue from last generation
+kais evolve cost-estimate optimize-code-review.yaml
+
+# Genome inspection
+kais evolve genome optimize-code-review --generation 7 --top 3
+# Shows top 3 genomes with fitness breakdown
+
+kais evolve gene-importance optimize-code-review
+# Shows which genes matter most:
+#   topology:         ████████░░ F=8.2, significant (best: hierarchy)
+#   developer_count:  ██████░░░░ F=5.1, significant (best: 3)
+#   developer_model:  █████░░░░░ F=4.3, significant (best: qwen2.5:32b)
+#   protocol:         ██░░░░░░░░ F=1.4, not significant
+#   temperature:      █░░░░░░░░░ F=0.8, not significant
+
+# Swarm
+kais swarm list
+kais swarm describe developer-pool
+kais swarm create -f swarm.yaml
+kais swarm status developer-pool
+# Current: 3 replicas | Desired: 4 | Last scale: 2m ago (up)
+# Triggers:
+#   queue_depth:  7 / target 3  → recommends 5
+#   metric:       3200ms / target 5000ms → recommends 3
+#   budget:       $0.35/task / max $0.50 → recommends 3
+# Next evaluation: 28s
+
+kais swarm history developer-pool
+# 14:30 scale_up   3→4  trigger: queue_depth (7 > 3)
+# 14:15 scale_up   2→3  trigger: queue_depth (5 > 3)
+# 13:00 scale_down 3→2  trigger: budget_efficiency ($0.62 > $0.50)
+
+kais swarm pause developer-pool     # disable autoscaling
+kais swarm resume developer-pool
+```
+
+---
+
+## Example: full evolution run
+
+```bash
+$ kais evolve cost-estimate optimize-code-review.yaml
+Evolution: optimize-code-review
+  Genome: 6 genes (4 enum, 1 integer, 1 float)
+  Search space: ~768 combinations
+  Population: 12, Generations: 20, Repeats: 3
+  Evaluations: ~240 (12 × 20)
+  Estimated cost per evaluation: $0.85
+  Estimated total: $204
+  Budget: $200
+  ⚠ Tight budget. May stop early due to cost. Consider:
+    - Reduce repeats to 2 (saves ~$68)
+    - Reduce population to 10 (saves ~$34)
+
+$ kais evolve run optimize-code-review.yaml --set stopping.maxCost=250
+evolution.kais.io/optimize-code-review created
+
+$ kais evolve status optimize-code-review --watch
+Gen  0: ▓░░░░░░░░░░░░░░░░░░░ best=0.45 avg=0.31 cost=$10
+Gen  1: ▓▓░░░░░░░░░░░░░░░░░░ best=0.52 avg=0.38 cost=$21
+Gen  5: ▓▓▓▓▓░░░░░░░░░░░░░░░ best=0.74 avg=0.61 cost=$56
+Gen 10: ▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░ best=0.84 avg=0.72 cost=$105
+Gen 13: ▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░ best=0.86 avg=0.78 cost=$140
+Gen 14: Stopped (stagnation: 4 generations without improvement)
+
+$ kais evolve results optimize-code-review
+Evolution: optimize-code-review
+  Generations: 14/20 (stopped: stagnation)
+  Total evaluations: 168
+  Total cost: $143.20
+  Best fitness: 0.86
+
+  Winner genome:
+    topology:              hierarchy
+    developer_count:       3
+    developer_model:       ollama/qwen2.5:32b
+    reviewer_model:        anthropic/claude-sonnet-4
+    architect_temperature: 0.3
+    protocol:              contract
+    system_prompt_style:   structured
+
+  Gene importance:
+    topology:         ████████░░ highly significant (hierarchy >> others)
+    developer_count:  ██████░░░░ significant (3 optimal, 2 too few, 5+ wasteful)
+    reviewer_model:   █████░░░░░ significant (sonnet >> qwen for review)
+    developer_model:  ███░░░░░░░ moderate (qwen sufficient for coding)
+    prompt_style:     ██░░░░░░░░ weak (structured slightly better)
+    temperature:      █░░░░░░░░░ not significant
+
+  Saved blueprints:
+    ✓ evolved-code-review (best, fitness 0.86)
+    ✓ evolved-code-review-variant-2 (runner-up, fitness 0.84)
+    ✓ evolved-code-review-variant-3 (budget option, fitness 0.79)
+```
+
+---
+
+## Resource requirements update
+
+No new infrastructure. Evolution uses existing Experiment runner (in-process mode). Swarm Controller is a lightweight loop in the operator.
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–5) | 1850m | 2148Mi | Base system |
+| Evolution (when running) | 500m–2000m | 512Mi–2Gi | Depends on parallel evals |
+| Swarm (controller) | ~0 | ~0 | Part of operator, negligible |
+| **Steady-state** | **1850m** | **2148Mi** | Same as Phase 5 |
+
+Evolution is bursty — costs CPU only while running. Between evolutions, zero overhead.
+
+---
+
+## What Phase 6 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Custom web dashboard | 7 |
+| Multi-objective Pareto evolution (NSGA-II) | 7+ |
+| Cross-evolution transfer learning | 8+ |
+| Recursive ecosystems | 8+ |
+| Distributed evolution (multi-node) | 9+ |
+| Automatic genome discovery (meta-evolution) | 10+ |
+
+---
+
+## Migration from Phase 5
+
+Additive:
+- 2 new CRDs: Evolution, Swarm
+- 2 new controllers: EvolutionController, SwarmController
+- Evolution reuses Experiment runner infrastructure
+- Blueprint suggestion logic in API server
+- Drain signal handling in cell-runtime
+- New DB tables
+- New CLI commands
+
+No breaking changes to Phase 1–5.

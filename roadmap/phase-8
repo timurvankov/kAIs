@@ -1,0 +1,1017 @@
+# kAIs — Phase 8: Recursive Ecosystems + RBAC + MCP Gateway
+
+**Goal:** Cell'ы создают подсистемы из Cell'ов, которые создают свои подсистемы. Бюджет как жидкость — течёт вниз по дереву. Контроль через budget exhaustion, не arbitrary depth limits. Плюс multi-user доступ с RBAC и стандартный MCP интерфейс для внешних интеграций.
+
+**Depends on:** Phase 7 (Dashboard, ClickHouse, Multi-node)
+
+**Duration estimate:** 3–4 weeks
+
+---
+
+## Зачем Phase 8
+
+Phase 1–7: Cell'ы могут спавнить children (Phase 2), но это плоская иерархия — parent → children, один уровень. Нет:
+
+- Formation которая спавнит sub-Formation для подзадач
+- Architect который создаёт research team, те создают sub-teams по направлениям
+- Experiment где каждый variant сам содержит экосистему
+
+Recursive ecosystems — Cell'ы как фрактал. Каждый Cell может стать экосистемой, каждая экосистема — Cell в более крупной экосистеме.
+
+Плюс: с dashboard и multi-node пора добавить RBAC — не все пользователи должны иметь доступ ко всему. И MCP Gateway — стандартный протокол для подключения кAIs как инструмент к другим системам.
+
+---
+
+## 8.1 — Recursive Cell hierarchy
+
+### Модель
+
+Уже заложена в Phase 1–2 архитектуру. Cell имеет `children`, children имеют `children`. Но до Phase 8 оператор ограничивал depth=1. Теперь — снимаем ограничение.
+
+```
+Mission: "Build complete SaaS application"
+│
+└── Cell: project-lead (Sonnet)
+    ├── Cell: backend-team (ecosystem coordinator)
+    │   ├── Cell: api-architect
+    │   ├── Cell: developer-0
+    │   ├── Cell: developer-1
+    │   └── Cell: db-team (sub-ecosystem!)
+    │       ├── Cell: schema-designer
+    │       └── Cell: migration-writer
+    │
+    ├── Cell: frontend-team (ecosystem coordinator)
+    │   ├── Cell: ui-architect
+    │   ├── Cell: component-dev-0
+    │   └── Cell: component-dev-1
+    │
+    ├── Cell: qa-team (ecosystem coordinator)
+    │   ├── Cell: test-planner
+    │   └── Cell: test-writer-pool (Swarm, 1-5 workers)
+    │
+    └── Cell: devops (single Cell, not ecosystem)
+```
+
+Depth 4 в этом примере. Each level spawned by its parent, not predefined.
+
+### K8s representation
+
+```
+Cell CRD "project-lead"
+  ├── Cell CRD "backend-team"             ownerRef → project-lead
+  │   ├── Cell CRD "api-architect"        ownerRef → backend-team
+  │   ├── Cell CRD "developer-0"          ownerRef → backend-team
+  │   ├── Cell CRD "developer-1"          ownerRef → backend-team
+  │   └── Cell CRD "db-team"              ownerRef → backend-team
+  │       ├── Cell CRD "schema-designer"  ownerRef → db-team
+  │       └── Cell CRD "migration-writer" ownerRef → db-team
+  │
+  ├── Cell CRD "frontend-team"            ownerRef → project-lead
+  │   └── ...
+  └── ...
+```
+
+K8s ownerReferences handle cascading deletion at any depth. Delete `backend-team` → all its children and grandchildren are garbage-collected.
+
+### CRD schema changes
+
+```yaml
+# Added to Cell CRD spec
+spec:
+  properties:
+    recursion:
+      type: object
+      properties:
+        maxDepth:
+          type: integer
+          default: 5
+          description: Maximum spawn depth from this Cell
+        maxDescendants:
+          type: integer
+          default: 50
+          description: Maximum total descendants (all levels)
+        spawnPolicy:
+          type: string
+          enum: [open, approval_required, blueprint_only, disabled]
+          default: open
+          description: |
+            open: Cell can spawn any children
+            approval_required: spawn queued for human approval
+            blueprint_only: Cell can only instantiate registered Blueprints
+            disabled: Cell cannot spawn children
+```
+
+### Budget as liquid
+
+Budget flows downward. No Cell can spend more than allocated by parent.
+
+```
+project-lead: $100 total budget
+├── allocates $40 to backend-team
+│   ├── backend-team allocates $15 to api-architect
+│   ├── backend-team allocates $8 to developer-0
+│   ├── backend-team allocates $8 to developer-1
+│   └── backend-team allocates $9 to db-team
+│       ├── db-team allocates $5 to schema-designer
+│       └── db-team allocates $4 to migration-writer
+│
+├── allocates $30 to frontend-team
+│   └── ...
+├── allocates $20 to qa-team
+│   └── ...
+└── allocates $10 to devops
+```
+
+Key rules:
+- Parent cannot allocate more than its remaining budget
+- Child cannot allocate more than its allocated amount
+- Unspent budget returns to parent when child completes/dies
+- Budget depletion cascades: if backend-team exhausted → all its children paused
+- Parent can top-up a child's budget if needed
+
+```typescript
+interface BudgetLedger {
+  allocate(from: string, to: string, amount: number): Promise<void>
+  spend(cellId: string, amount: number): Promise<void>
+  reclaim(cellId: string): Promise<number>  // returns unspent
+  getBalance(cellId: string): Promise<BudgetBalance>
+  getTree(rootCellId: string): Promise<BudgetTree>
+}
+
+interface BudgetBalance {
+  allocated: number       // total given by parent
+  spent: number          // consumed by LLM calls + tools
+  delegated: number      // given to children
+  available: number      // allocated - spent - delegated
+}
+```
+
+### Budget enforcement in operator
+
+```typescript
+async function reconcileBudget(cell: CellResource) {
+  const balance = await budgetLedger.getBalance(cell.metadata.uid)
+
+  if (balance.available <= 0) {
+    // Pause this cell and all descendants
+    await pauseCellTree(cell)
+    emitEvent('BudgetExhausted', cell,
+      `Budget exhausted: allocated $${balance.allocated}, ` +
+      `spent $${balance.spent}, delegated $${balance.delegated}`)
+
+    // Notify parent
+    const parent = await getParentCell(cell)
+    if (parent) {
+      await nats.publish(`cell.${parent.namespace}.${parent.name}.inbox`, {
+        type: 'budget_alert',
+        child: cell.metadata.name,
+        message: `Child ${cell.metadata.name} budget exhausted. ` +
+                 `Spent $${balance.spent}. Allocate more or accept current results.`,
+      })
+    }
+  }
+}
+```
+
+### spawn_cell tool v2 (recursive-aware)
+
+```typescript
+const spawnCellToolV2 = {
+  name: 'spawn_cell',
+  description: 'Create a child Cell. Can be a simple agent or ecosystem coordinator.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      systemPrompt: { type: 'string' },
+      model: { type: 'string' },
+      tools: { type: 'array', items: { type: 'string' } },
+      budget: { type: 'number' },
+      // New in Phase 8:
+      canSpawnChildren: {
+        type: 'boolean',
+        default: false,
+        description: 'Allow this child to spawn its own children (ecosystem coordinator)'
+      },
+      blueprintRef: {
+        type: 'string',
+        description: 'Instantiate a Blueprint instead of defining inline'
+      },
+      maxDepth: {
+        type: 'integer',
+        default: 3,
+        description: 'How many levels deep this subtree can go'
+      }
+    },
+    required: ['name', 'systemPrompt']
+  }
+}
+```
+
+Example: architect decides it needs a research team
+
+```
+architect-0 calls spawn_cell({
+  name: "research-team",
+  systemPrompt: "You coordinate a research team. Spawn researchers as needed.",
+  model: "claude-sonnet-4-20250514",
+  tools: ["spawn_cell", "send_message", "recall", "web_search"],
+  budget: 5.00,
+  canSpawnChildren: true,
+  maxDepth: 2
+})
+→ Cell "architect-0-research-team" created
+
+research-team calls spawn_cell({
+  name: "literature-review",
+  systemPrompt: "Search for and summarize papers on topic X",
+  model: "qwen2.5:32b",
+  tools: ["web_search", "send_message", "remember"],
+  budget: 2.00,
+  canSpawnChildren: false    // leaf node
+})
+→ Cell "architect-0-research-team-literature-review" created
+```
+
+### Recursion safety
+
+Preventing runaway spawning:
+
+```typescript
+async function validateSpawn(parent: CellState, input: SpawnInput): Promise<ValidationResult> {
+  // 1. Depth check
+  const currentDepth = await getCellDepth(parent.id)
+  const maxDepth = parent.spec.recursion?.maxDepth ?? 5
+  if (currentDepth >= maxDepth) {
+    return { allowed: false, reason: `Max depth ${maxDepth} reached` }
+  }
+
+  // 2. Descendant count check
+  const descendants = await countDescendants(parent.id)
+  const maxDescendants = parent.spec.recursion?.maxDescendants ?? 50
+  if (descendants >= maxDescendants) {
+    return { allowed: false, reason: `Max descendants ${maxDescendants} reached` }
+  }
+
+  // 3. Spawn policy check
+  const policy = parent.spec.recursion?.spawnPolicy ?? 'open'
+  if (policy === 'disabled') {
+    return { allowed: false, reason: 'Spawning disabled for this Cell' }
+  }
+  if (policy === 'blueprint_only' && !input.blueprintRef) {
+    return { allowed: false, reason: 'Only Blueprint instantiation allowed' }
+  }
+  if (policy === 'approval_required') {
+    await queueForApproval(parent, input)
+    return { allowed: false, reason: 'Queued for human approval', pending: true }
+  }
+
+  // 4. Budget check
+  const balance = await budgetLedger.getBalance(parent.id)
+  const requestedBudget = input.budget ?? balance.available * 0.1
+  if (requestedBudget > balance.available) {
+    return { allowed: false, reason: `Insufficient budget: $${balance.available} available` }
+  }
+
+  // 5. Platform-wide Cell limit
+  const totalCells = await countAllCells()
+  const platformLimit = config.maxTotalCells ?? 500
+  if (totalCells >= platformLimit) {
+    return { allowed: false, reason: `Platform limit of ${platformLimit} Cells reached` }
+  }
+
+  return { allowed: true }
+}
+```
+
+### Tree visualization
+
+```bash
+$ kais tree project-lead -n project-x
+project-lead ($100, spent $47.23)
+├── backend-team ($40, spent $22.10)
+│   ├── api-architect ($15, spent $8.40)
+│   ├── developer-0 ($8, spent $5.20)
+│   ├── developer-1 ($8, spent $4.80)
+│   └── db-team ($9, spent $3.70)
+│       ├── schema-designer ($5, spent $2.10)
+│       └── migration-writer ($4, spent $1.60)
+├── frontend-team ($30, spent $15.40)
+│   ├── ui-architect ($12, spent $6.80)
+│   ├── component-dev-0 ($9, spent $4.30)
+│   └── component-dev-1 ($9, spent $4.30)
+├── qa-team ($20, spent $8.23)
+│   ├── test-planner ($8, spent $3.20)
+│   └── test-writer-0 ($12, spent $5.03)
+└── devops ($10, spent $1.50)
+
+Total: 13 Cells, depth 3, $47.23 / $100.00 spent
+```
+
+Dashboard: interactive tree with collapsible nodes, budget bars, real-time cost updates.
+
+---
+
+## 8.2 — Cross-level knowledge scoping
+
+With recursive hierarchies, knowledge scoping becomes tree-based:
+
+```
+project-lead scope
+│  "SaaS app uses TypeScript + Postgres"
+│
+├── backend-team scope
+│   │  "API uses Fastify with JWT auth"
+│   │
+│   ├── db-team scope
+│   │   "Schema uses snake_case column names"
+│   │
+│   └── (api-architect, developer-0, developer-1 share backend-team scope)
+│
+├── frontend-team scope
+│   "Frontend uses React + Tailwind"
+│
+└── qa-team scope
+    "E2E tests use Playwright"
+```
+
+Knowledge visibility: each Cell sees its own scope + all ancestor scopes up to root.
+
+`db-team/schema-designer` sees:
+1. Own facts
+2. db-team facts
+3. backend-team facts
+4. project-lead facts
+5. Realm facts
+6. Platform facts
+
+`frontend-team/component-dev-0` does NOT see backend-team or db-team facts — different branch.
+
+### Implementation
+
+```typescript
+async function getVisibleKnowledge(cellId: string, query: string): Promise<Fact[]> {
+  // Walk up the tree to root, collecting scope IDs
+  const scopes: KnowledgeScope[] = []
+  let current = cellId
+
+  while (current) {
+    const cell = await store.getCell(current)
+    scopes.push({
+      level: 'cell',
+      cellId: current,
+    })
+    current = cell.parentCellId  // walk up
+  }
+
+  // Add realm and platform scopes
+  scopes.push({ level: 'realm', realmId: cell.namespace })
+  scopes.push({ level: 'platform' })
+
+  // Search across all visible scopes
+  return knowledgeStore.searchMultiScope(query, scopes, {
+    maxResults: 20,
+    // Weight: closer scope = higher relevance
+    scopeWeights: scopes.map((_, i) => 1 / (i + 1)),
+  })
+}
+```
+
+### Knowledge promotion in recursive trees
+
+```
+Fact discovered by db-team/schema-designer:
+  "UUID v7 is better than v4 for sortable primary keys"
+  scope: cell (schema-designer)
+
+Used successfully in 3 missions within db-team:
+  → promoted to db-team scope
+
+Used successfully across backend-team children:
+  → promoted to backend-team scope
+
+Confirmed across backend + frontend teams:
+  → promoted to project-lead scope
+
+Validated across multiple projects:
+  → promoted to realm scope
+
+Validated across realms:
+  → promoted to platform scope
+```
+
+---
+
+## 8.3 — Spawn approval workflow
+
+For `spawnPolicy: approval_required`:
+
+```yaml
+apiVersion: kais.io/v1
+kind: SpawnRequest
+metadata:
+  name: req-001
+  namespace: project-x
+spec:
+  requestor: architect-0
+  requestedCell:
+    name: security-auditor
+    systemPrompt: "Audit all code for security vulnerabilities..."
+    model: claude-sonnet-4-20250514
+    budget: 15.00
+    canSpawnChildren: false
+  reason: "Need dedicated security review for auth module"
+
+status:
+  phase: Pending         # Pending | Approved | Rejected
+  decidedBy: null
+  decidedAt: null
+```
+
+In dashboard: notification badge, approval page with requestor context, one-click approve/reject.
+
+In CLI:
+
+```bash
+$ kais spawn-requests list
+ID       REQUESTOR      CELL NAME          BUDGET   STATUS    AGE
+req-001  architect-0    security-auditor   $15.00   Pending   2m
+
+$ kais spawn-requests approve req-001
+SpawnRequest req-001 approved. Cell security-auditor will be created.
+
+$ kais spawn-requests reject req-001 --reason "Use existing reviewer instead"
+```
+
+Automated approval via Instinct:
+
+```yaml
+apiVersion: kais.io/v1
+kind: Instinct
+metadata:
+  name: auto-approve-cheap-spawns
+spec:
+  watch:
+    resources:
+      - kind: SpawnRequest
+  rules:
+    - name: auto-approve
+      condition:
+        type: expression
+        expr: |
+          spawnRequest.spec.requestedCell.budget < 2.0
+          && spawnRequest.spec.requestedCell.canSpawnChildren == false
+      actions:
+        - type: approve_spawn
+          params:
+            requestId: "{{ spawnRequest.metadata.name }}"
+```
+
+---
+
+## 8.4 — RBAC
+
+### Model
+
+```yaml
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: project-lead
+  namespace: project-x
+spec:
+  rules:
+    - resources: [cells, formations, missions]
+      verbs: [get, list, create, update, delete]
+    - resources: [experiments, evolutions]
+      verbs: [get, list, create]
+    - resources: [blueprints]
+      verbs: [get, list, use]
+    - resources: [knowledge]
+      verbs: [get, list, add, invalidate]
+    - resources: [spawn-requests]
+      verbs: [get, list, approve, reject]
+    - resources: [budgets]
+      verbs: [get, allocate]
+      maxAllocation: 100.00           # max budget this role can allocate
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: researcher
+  namespace: experiments
+spec:
+  rules:
+    - resources: [experiments, evolutions]
+      verbs: [get, list, create, update, delete]
+    - resources: [blueprints]
+      verbs: [get, list, use, create]
+    - resources: [cells, formations]
+      verbs: [get, list]              # read-only on production
+    - resources: [budgets]
+      verbs: [get]
+      maxAllocation: 50.00
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: observer
+spec:
+  rules:
+    - resources: [cells, formations, missions, experiments, evolutions, blueprints, knowledge]
+      verbs: [get, list]
+    - resources: [dashboard]
+      verbs: [view]
+```
+
+### Authentication
+
+Phase 8 keeps auth simple — not building an identity provider:
+
+```yaml
+# kais-config.yaml
+auth:
+  # Option 1: Static tokens (simplest, for personal use)
+  method: token
+  tokens:
+    - name: timur
+      token: ${KAIS_ADMIN_TOKEN}
+      roles: [admin]
+    - name: ci
+      token: ${KAIS_CI_TOKEN}
+      roles: [researcher]
+
+  # Option 2: OIDC (for team use)
+  # method: oidc
+  # issuer: https://accounts.google.com
+  # clientId: ...
+  # roleMapping:
+  #   admin: [timur@example.com]
+  #   researcher: [*@example.com]
+```
+
+CLI stores token:
+
+```bash
+$ kais auth login --token $MY_TOKEN
+Authenticated as: timur (roles: admin)
+Token saved to ~/.kais/config
+
+$ kais auth whoami
+User: timur
+Roles: admin
+Namespaces: * (all)
+```
+
+Dashboard: login page → token input or OIDC redirect → JWT session.
+
+### RBAC enforcement
+
+```typescript
+// In kais-api middleware
+async function authorize(req: Request, res: Response, next: Function) {
+  const user = req.user  // from auth middleware
+  const resource = req.params.resource
+  const verb = httpMethodToVerb(req.method)
+  const namespace = req.params.namespace ?? 'default'
+
+  const allowed = await rbac.check(user, resource, verb, namespace)
+
+  if (!allowed) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: `User ${user.name} cannot ${verb} ${resource} in ${namespace}`,
+    })
+    return
+  }
+
+  // Budget limit check
+  if (verb === 'create' && resource === 'formations') {
+    const budget = req.body.spec?.budget?.maxTotalCost ?? 0
+    const maxAllocation = await rbac.getMaxAllocation(user, namespace)
+    if (budget > maxAllocation) {
+      res.status(403).json({
+        error: 'Budget limit exceeded',
+        message: `Max allocation for your role: $${maxAllocation}`,
+      })
+      return
+    }
+  }
+
+  next()
+}
+```
+
+---
+
+## 8.5 — MCP Gateway
+
+Model Context Protocol gateway — expose kAIs as MCP server so external LLMs (Claude Desktop, Cursor, other agents) can use kAIs as a tool.
+
+### What MCP Gateway exposes
+
+```typescript
+const mcpTools = [
+  {
+    name: 'kais_launch_team',
+    description: 'Launch an AI team from a Blueprint to accomplish a task',
+    input_schema: {
+      type: 'object',
+      properties: {
+        blueprint: { type: 'string', description: 'Blueprint name' },
+        objective: { type: 'string', description: 'What the team should accomplish' },
+        budget: { type: 'number', description: 'Max budget in USD' },
+        params: { type: 'object', description: 'Blueprint parameter overrides' },
+      },
+      required: ['blueprint', 'objective']
+    }
+  },
+  {
+    name: 'kais_mission_status',
+    description: 'Check status of a running mission',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mission: { type: 'string' }
+      },
+      required: ['mission']
+    }
+  },
+  {
+    name: 'kais_recall',
+    description: 'Search kAIs knowledge graph for information from past missions',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        scope: { type: 'string', enum: ['platform', 'realm'] }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'kais_list_blueprints',
+    description: 'List available team blueprints with success rates and costs',
+  },
+  {
+    name: 'kais_send_message',
+    description: 'Send a message to a running Cell',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cell: { type: 'string' },
+        message: { type: 'string' }
+      },
+      required: ['cell', 'message']
+    }
+  },
+  {
+    name: 'kais_get_results',
+    description: 'Get results/artifacts from a completed mission',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mission: { type: 'string' }
+      },
+      required: ['mission']
+    }
+  }
+]
+```
+
+### Use case: Claude Desktop delegates work to kAIs
+
+```
+User (in Claude Desktop): "Build me a REST API for managing bookmarks"
+
+Claude Desktop:
+  1. Calls kais_list_blueprints → sees "evolved-code-review" (87% success, $2.14 avg)
+  2. Calls kais_launch_team({
+       blueprint: "evolved-code-review",
+       objective: "Build REST API for managing bookmarks with CRUD, tags, search, tests",
+       budget: 5.00,
+       params: { language: "typescript", model_tier: "standard" }
+     })
+  3. Returns mission-id to user: "I've launched a team to build this. ETA ~5 minutes."
+  4. Polls kais_mission_status periodically
+  5. When done: kais_get_results → returns file listing + summary
+  6. "Your API is ready. Here's what was built: ..."
+```
+
+### MCP Server deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-mcp-gateway
+  namespace: kais-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: mcp
+          image: kais-mcp-gateway:latest
+          ports:
+            - containerPort: 3001       # MCP SSE transport
+          env:
+            - name: KAIS_API_URL
+              value: http://kais-api.kais-system:8080
+            - name: KAIS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kais-mcp-credentials
+                  key: token
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+```
+
+MCP config for Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "kais": {
+      "url": "http://localhost:3001/mcp",
+      "name": "kais"
+    }
+  }
+}
+```
+
+Exposed via `kais mcp serve` (port-forward) or Ingress for remote access.
+
+---
+
+## 8.6 — Ecosystem templates (recursive Blueprints)
+
+Blueprint that defines a recursive structure:
+
+```yaml
+apiVersion: kais.io/v1
+kind: Blueprint
+metadata:
+  name: saas-builder
+spec:
+  description: |
+    Full SaaS application builder. Spawns specialized sub-teams
+    for backend, frontend, QA. Each sub-team uses its own Blueprint.
+
+  parameters:
+    - name: complexity
+      type: enum
+      values: [small, medium, large]
+      default: medium
+
+    - name: total_budget
+      type: number
+      default: 50.00
+
+  formation:
+    cells:
+      - name: project-lead
+        replicas: 1
+        spec:
+          mind:
+            provider: anthropic
+            model: claude-sonnet-4-20250514
+            systemPrompt: |
+              You are a project lead building a SaaS application.
+              You have these sub-team blueprints available:
+              - code-review-team: for backend/frontend implementation
+              - qa-team: for testing
+              Use spawn_cell with blueprintRef to create sub-teams.
+              Allocate budget wisely across teams.
+          tools:
+            - name: spawn_cell
+            - name: send_message
+            - name: recall
+            - name: remember
+          resources:
+            maxTotalCost: "{{ total_budget }}"
+          recursion:
+            maxDepth: 3
+            maxDescendants: "{{ {'small': 10, 'medium': 25, 'large': 50}[complexity] }}"
+            spawnPolicy: blueprint_only
+
+  # Sub-blueprints available to this ecosystem
+  availableBlueprints:
+    - code-review-team
+    - qa-team
+    - research-team
+```
+
+Project-lead decides structure at runtime based on the mission. For a simple task: one code-review-team. For complex SaaS: backend-team + frontend-team + qa-team + devops, each its own sub-Formation.
+
+---
+
+## DB schema additions
+
+```sql
+-- Cell tree (supplements K8s ownerReferences with queryable tree)
+CREATE TABLE cell_tree (
+  cell_id UUID PRIMARY KEY REFERENCES cells(id) ON DELETE CASCADE,
+  parent_id UUID REFERENCES cells(id),
+  root_id UUID NOT NULL,             -- root of the tree
+  depth INT NOT NULL DEFAULT 0,
+  path TEXT NOT NULL,                -- materialized path: "root/parent/child"
+  descendant_count INT DEFAULT 0
+);
+
+CREATE INDEX idx_cell_tree_root ON cell_tree(root_id);
+CREATE INDEX idx_cell_tree_parent ON cell_tree(parent_id);
+CREATE INDEX idx_cell_tree_path ON cell_tree USING gist(path gist_trgm_ops);
+
+-- Budget ledger (append-only for auditability)
+CREATE TABLE budget_ledger (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  cell_id UUID NOT NULL,
+  operation TEXT NOT NULL,            -- allocate | spend | reclaim | top_up
+  amount NUMERIC NOT NULL,
+  from_cell_id UUID,                  -- for allocate: parent
+  to_cell_id UUID,                    -- for allocate: child
+  balance_after NUMERIC NOT NULL,
+  reason TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_budget_cell ON budget_ledger(cell_id, created_at DESC);
+
+-- Budget balances (materialized from ledger)
+CREATE TABLE budget_balances (
+  cell_id UUID PRIMARY KEY REFERENCES cells(id) ON DELETE CASCADE,
+  allocated NUMERIC NOT NULL DEFAULT 0,
+  spent NUMERIC NOT NULL DEFAULT 0,
+  delegated NUMERIC NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Spawn requests
+CREATE TABLE spawn_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL,
+  requestor_cell_id UUID REFERENCES cells(id),
+  requested_spec JSONB NOT NULL,
+  reason TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+  decided_by TEXT,
+  decided_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- RBAC
+CREATE TABLE roles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT,                      -- null = cluster-wide
+  rules JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(name, namespace)
+);
+
+CREATE TABLE user_role_bindings (
+  user_name TEXT NOT NULL,
+  role_id UUID REFERENCES roles(id) ON DELETE CASCADE,
+  namespace TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  PRIMARY KEY (user_name, role_id)
+);
+```
+
+---
+
+## New CLI commands
+
+```bash
+# Recursive tree
+kais tree project-lead                       # ASCII tree with budgets
+kais tree project-lead --depth 2             # limit display depth
+kais tree project-lead --format json         # machine readable
+
+# Budget management
+kais budget show project-lead                # balance breakdown
+kais budget tree project-lead                # budget flow across tree
+kais budget top-up backend-team --amount 10  # add budget to child
+kais budget history project-lead             # ledger history
+
+# Spawn requests
+kais spawn-requests list
+kais spawn-requests approve req-001
+kais spawn-requests reject req-001 --reason "..."
+
+# RBAC
+kais auth login --token $TOKEN
+kais auth whoami
+kais roles list
+kais roles describe project-lead
+kais roles bind user:timur role:admin --namespace project-x
+
+# MCP Gateway
+kais mcp serve                               # start MCP server locally
+kais mcp serve --port 3001                   # custom port
+kais mcp status                              # show connected clients
+```
+
+---
+
+## Example: recursive ecosystem in action
+
+```bash
+$ kais blueprint use saas-builder \
+    --namespace big-project \
+    --set complexity=medium \
+    --set total_budget=50 \
+    --mission "Build a bookmark management SaaS with auth, CRUD, tags, search, and dashboard"
+
+formation.kais.io/saas-builder-inst-1 created
+mission.kais.io/build-bookmark-saas created
+
+$ kais events -n big-project -w
+15:00:01 Cell project-lead Started, budget $50
+15:00:05 Cell project-lead Planning: need backend, frontend, and QA teams
+15:00:08 Cell project-lead spawn_cell: backend-team (blueprint: code-review-team, budget: $20)
+15:00:09 Cell project-lead spawn_cell: frontend-team (blueprint: code-review-team, budget: $15)
+15:00:10 Cell project-lead spawn_cell: qa-team (budget: $10)
+15:00:11 Cell project-lead Keeping $5 reserve for coordination
+
+15:00:15 Cell backend-team Started (code-review-team blueprint)
+15:00:15 Cell backend-team → spawned: architect-0, developer-0, developer-1, reviewer-0
+15:00:16 Cell frontend-team Started
+15:00:16 Cell frontend-team → spawned: architect-0, developer-0, reviewer-0
+
+15:00:20 Cell backend-team/architect-0 Planning: need API + database schema
+15:00:25 Cell backend-team/architect-0 spawn_cell: db-specialist (budget: $3)
+15:00:26 Cell backend-team/db-specialist Started (depth: 3)
+
+$ kais tree project-lead -n big-project
+project-lead ($50.00, spent $2.30)
+├── backend-team ($20.00, spent $1.20)
+│   ├── architect-0 ($7.00, spent $0.80)
+│   ├── developer-0 ($4.00, spent $0.15)
+│   ├── developer-1 ($4.00, spent $0.10)
+│   ├── reviewer-0 ($2.00, spent $0.00)
+│   └── db-specialist ($3.00, spent $0.15)
+├── frontend-team ($15.00, spent $0.85)
+│   ├── architect-0 ($6.00, spent $0.55)
+│   ├── developer-0 ($5.00, spent $0.20)
+│   └── reviewer-0 ($4.00, spent $0.10)
+├── qa-team ($10.00, spent $0.25)
+│   └── test-planner ($10.00, spent $0.25)
+└── [reserve] ($5.00)
+
+Total: 12 Cells, depth 3, $2.30 / $50.00 spent
+
+# 20 minutes later...
+$ kais mission status build-bookmark-saas
+Status: Running
+Progress: backend 70%, frontend 40%, QA waiting
+Budget: $18.45 / $50.00
+Checks: 1/4 passed (API routes exist ✓)
+```
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–7) | 2700m | 3108Mi | Existing system |
+| kais-mcp-gateway | 50m | 64Mi | Lightweight SSE server |
+| RBAC (in kais-api) | ~0 | ~0 | Negligible overhead |
+| **Total (base)** | **2750m** | **3172Mi** | ~3 cores, ~3GB |
+
+Recursive ecosystems don't add infra — they add Cells. A 12-Cell recursive tree needs same resources as 12 flat Cells. Budget enforcement is the safety valve.
+
+---
+
+## What Phase 8 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Multi-cluster federation | 9+ |
+| Public Blueprint marketplace | 9+ |
+| Inter-ecosystem communication (sibling trees) | 9+ |
+| Self-modifying Cell code (Gödel Agent pattern) | 10+ |
+| Autonomous goal generation (Cell invents own missions) | 10+ |
+| Human-Cell hybrid teams (human as Cell) | 9 |
+
+---
+
+## Migration from Phase 7
+
+Additive:
+- 1 new CRD: SpawnRequest
+- Recursion fields added to Cell CRD spec
+- Budget ledger system (new DB tables + BudgetLedger service)
+- RBAC middleware in kais-api
+- MCP Gateway (new Deployment)
+- Recursive knowledge scoping in knowledge service
+- Tree visualization in dashboard + CLI
+- spawn_cell tool v2 in cell-runtime
+- New CLI commands
+
+No breaking changes. Existing flat Cell hierarchies continue to work. Recursion is opt-in via `canSpawnChildren: true`.

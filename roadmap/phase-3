@@ -1,0 +1,944 @@
+# kAIs — Phase 3: Experiment Engine + Protocols + In-Process Mode
+
+**Goal:** Научная платформа для экспериментов с multi-agent системами. Запускать варианты, собирать метрики, сравнивать статистически. Плюс формальные протоколы взаимодействия и быстрый in-process режим для массовых прогонов.
+
+**Depends on:** Phase 2 (Formation, Mission, Topology)
+
+**Duration estimate:** 2–3 weeks
+
+---
+
+## Зачем Phase 3
+
+Phase 1–2 дают production: запустил команду, дал задачу, получил результат. Но нет ответа на вопросы:
+
+- Какая topology лучше для code review — hierarchy или star?
+- 3 developer'а или 5 — что эффективнее по cost/quality?
+- Claude Sonnet vs Qwen 32B для роли reviewer — разница значима?
+- Contract protocol vs свободная коммуникация — что быстрее?
+
+Phase 3 превращает kAIs из инструмента в **исследовательскую платформу**.
+
+---
+
+## Three pillars
+
+```
+┌─────────────────────────────────────────────────┐
+│              Experiment Engine                    │
+│  Define variants → run matrix → collect metrics  │
+│  → statistical analysis → report                 │
+├─────────────────────────────────────────────────┤
+│              Protocol System                     │
+│  Formal state machines for Cell interaction      │
+│  contract | deliberation | auction | gossip      │
+├─────────────────────────────────────────────────┤
+│            In-Process Runtime                    │
+│  worker_threads instead of Pods                  │
+│  1000 Cells on laptop, spawn in ms              │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+## 3.1 — Experiment CRD
+
+```yaml
+apiVersion: kais.io/v1
+kind: Experiment
+metadata:
+  name: topology-comparison
+  namespace: experiments
+spec:
+  # Что варьируем
+  variables:
+    - name: topology
+      values:
+        - type: hierarchy
+          root: architect
+        - type: star
+          hub: architect
+        - type: full_mesh
+
+    - name: developer_count
+      values: [2, 3, 5]
+
+    - name: developer_model
+      values:
+        - provider: ollama
+          model: qwen2.5:32b
+        - provider: anthropic
+          model: claude-sonnet-4-20250514
+
+  # Сколько повторов каждого варианта (для статистической значимости)
+  repeats: 5
+
+  # Базовая Formation — переменные подставляются
+  template:
+    kind: Formation
+    spec:
+      cells:
+        - name: architect
+          replicas: 1
+          spec:
+            mind:
+              provider: anthropic
+              model: claude-sonnet-4-20250514
+              systemPrompt: "You are a senior architect..."
+        - name: developer
+          replicas: "{{ developer_count }}"       # variable injection
+          spec:
+            mind:
+              provider: "{{ developer_model.provider }}"
+              model: "{{ developer_model.model }}"
+              systemPrompt: "You are a developer..."
+        - name: reviewer
+          replicas: 1
+          spec:
+            mind:
+              provider: anthropic
+              model: claude-sonnet-4-20250514
+              systemPrompt: "You review code..."
+      topology: "{{ topology }}"                   # variable injection
+
+  # Задача для каждого прогона
+  mission:
+    objective: |
+      Implement a REST API endpoint for user registration.
+      Requirements: validation, password hashing, error handling, tests.
+    completion:
+      checks:
+        - name: tests-pass
+          type: command
+          command: npm test
+      timeout: 20m
+
+  # Что измеряем
+  metrics:
+    - name: completion_time
+      type: duration
+      description: Time from mission start to completion
+
+    - name: total_cost
+      type: sum
+      source: cell.cost
+      description: Total LLM cost across all cells
+
+    - name: total_tokens
+      type: sum
+      source: cell.tokens
+
+    - name: message_count
+      type: count
+      source: cell.events[type=message_sent]
+
+    - name: llm_calls
+      type: count
+      source: cell.events[type=llm_call]
+
+    - name: code_quality
+      type: llm_judge
+      judge:
+        provider: anthropic
+        model: claude-sonnet-4-20250514
+        prompt: |
+          Rate the code quality from 1-10 based on:
+          - Correctness, security, readability, test coverage
+          Return only a JSON: {"score": N, "reasoning": "..."}
+      source: workspace/shared/src/
+
+    - name: mission_success
+      type: boolean
+      source: mission.status.phase == "Succeeded"
+
+  # Runtime mode
+  runtime: in-process          # in-process | kubernetes
+  # in-process: worker_threads, fast, no Pod overhead
+  # kubernetes: real Pods, slower, full isolation
+
+  # Budget для всего эксперимента
+  budget:
+    maxTotalCost: 100.00
+    # Estimated cost per run: ~$2
+    # 3 topologies × 3 counts × 2 models × 5 repeats = 90 runs
+    # 90 × $2 = $180 — over budget!
+    # System will warn and suggest: reduce repeats to 3, or use ollama for more variants
+    abortOnOverBudget: true
+
+  # Parallelism
+  parallel: 3                  # max concurrent runs
+
+status:
+  phase: Running               # Pending | Running | Analyzing | Completed | Failed | Aborted
+  totalRuns: 90
+  completedRuns: 34
+  failedRuns: 2
+  estimatedCost: 178.50
+  actualCost: 67.23
+  estimatedTimeRemaining: 45m
+  currentRuns:
+    - id: run-035
+      variables: { topology: hierarchy, developer_count: 3, developer_model: qwen2.5:32b }
+      repeat: 2
+      phase: Running
+      cost: 1.87
+```
+
+### Experiment Controller logic
+
+```
+reconcileExperiment(exp):
+  switch exp.status.phase:
+    case "Pending":
+      # Generate variant matrix
+      matrix = cartesianProduct(exp.spec.variables)
+      runs = []
+      for variant in matrix:
+        for i in 1..exp.spec.repeats:
+          runs.push({ variables: variant, repeat: i })
+
+      # Estimate cost
+      estimatedCostPerRun = estimateCost(exp.spec.template, exp.spec.mission)
+      totalEstimate = runs.length * estimatedCostPerRun
+
+      if totalEstimate > exp.spec.budget.maxTotalCost:
+        if exp.spec.budget.abortOnOverBudget:
+          exp.status.phase = "Failed"
+          exp.status.message = "Estimated cost $${totalEstimate} exceeds budget $${budget}"
+          # Suggest alternatives
+          exp.status.suggestions = [
+            "Reduce repeats from ${repeats} to ${suggestedRepeats}",
+            "Use local models for ${cheaperVariant}",
+            "Remove variable '${leastImpactful}'"
+          ]
+          return
+
+      exp.status.totalRuns = runs.length
+      exp.status.estimatedCost = totalEstimate
+      exp.status.phase = "Running"
+      saveRunQueue(exp.id, runs)
+
+    case "Running":
+      activeRuns = getActiveRuns(exp.id)
+      pendingRuns = getPendingRuns(exp.id)
+
+      # Launch up to parallel limit
+      while activeRuns.length < exp.spec.parallel && pendingRuns.length > 0:
+        run = pendingRuns.shift()
+        launchRun(exp, run)
+        activeRuns.push(run)
+
+      # Check budget
+      if exp.status.actualCost >= exp.spec.budget.maxTotalCost:
+        abortActiveRuns(exp)
+        exp.status.phase = "Analyzing"  # analyze what we have
+        return
+
+      # Check completion
+      if pendingRuns.length == 0 && activeRuns.length == 0:
+        exp.status.phase = "Analyzing"
+
+    case "Analyzing":
+      results = getAllRunResults(exp.id)
+      analysis = analyzeResults(results, exp.spec.metrics)
+      exp.status.analysis = analysis
+      exp.status.phase = "Completed"
+```
+
+### Cost estimation before launch
+
+```typescript
+function estimateCost(template: FormationTemplate, mission: MissionSpec): number {
+  let estimate = 0
+
+  for (const cellTemplate of template.spec.cells) {
+    const model = resolveModel(cellTemplate.spec.mind)
+    const estimatedTurns = estimateTurns(mission.completion.timeout)
+    const tokensPerTurn = MODEL_TOKEN_ESTIMATES[model.id] ?? 2000
+    const costPerToken = MODEL_COSTS[model.id]
+
+    estimate += cellTemplate.replicas * estimatedTurns * tokensPerTurn * costPerToken
+  }
+
+  // Add LLM judge cost if present
+  for (const metric of mission.metrics ?? []) {
+    if (metric.type === 'llm_judge') {
+      estimate += MODEL_COSTS[metric.judge.model] * 5000  // ~5K tokens per judgment
+    }
+  }
+
+  return estimate
+}
+```
+
+System предупреждает до запуска: "Experiment will run 90 variants × 5 repeats = 450 runs. Estimated cost: $178. Your budget: $100. Reduce repeats to 2 or remove developer_model variable to fit budget."
+
+---
+
+## 3.2 — Statistical Analysis
+
+После сбора результатов — автоматический анализ.
+
+```typescript
+interface ExperimentAnalysis {
+  // Per-metric summary
+  metrics: {
+    [metricName: string]: {
+      // Per-variant stats
+      variants: {
+        [variantKey: string]: {
+          mean: number
+          median: number
+          stddev: number
+          min: number
+          max: number
+          n: number
+          ci95: [number, number]   // 95% confidence interval
+        }
+      }
+
+      // Pairwise comparisons
+      comparisons: {
+        variantA: string
+        variantB: string
+        difference: number         // mean A - mean B
+        pValue: number             // t-test p-value
+        significant: boolean       // p < 0.05
+        effectSize: number         // Cohen's d
+        winner: string | 'tie'
+      }[]
+
+      // Best variant
+      best: {
+        variant: string
+        mean: number
+        significantlyBetter: boolean  // vs second best
+      }
+    }
+  }
+
+  // Multi-objective Pareto front
+  pareto: {
+    metrics: string[]             // e.g. ["completion_time", "total_cost", "code_quality"]
+    front: {
+      variant: string
+      values: Record<string, number>
+    }[]
+  }
+
+  // Summary in natural language (LLM-generated)
+  summary: string
+}
+```
+
+**Implementation:** Use `simple-statistics` npm package for t-tests, confidence intervals, effect sizes. No heavy deps needed.
+
+### Report generation
+
+```bash
+$ kais experiment results topology-comparison
+
+╔══════════════════════════════════════════════════════════════╗
+║  Experiment: topology-comparison                             ║
+║  Runs: 90 (88 succeeded, 2 failed)                          ║
+║  Total cost: $94.23                                          ║
+║  Duration: 2h 14m                                            ║
+╚══════════════════════════════════════════════════════════════╝
+
+── completion_time (seconds) ──────────────────────────────────
+
+  topology=hierarchy, devs=3, model=sonnet    284 ± 43  ████████░░  *best*
+  topology=star, devs=3, model=sonnet         312 ± 51  █████████░
+  topology=full_mesh, devs=3, model=sonnet    367 ± 89  ██████████
+
+  hierarchy vs star:      -28s (p=0.03, significant, d=0.58)
+  hierarchy vs full_mesh: -83s (p<0.001, significant, d=1.12)
+  star vs full_mesh:      -55s (p=0.01, significant, d=0.74)
+
+── total_cost ($) ─────────────────────────────────────────────
+
+  devs=2, model=qwen      $0.42 ± 0.08  ██░░░░░░░░  *cheapest*
+  devs=3, model=qwen      $0.61 ± 0.12  ███░░░░░░░
+  devs=3, model=sonnet    $2.14 ± 0.34  ████████░░
+  devs=5, model=sonnet    $3.87 ± 0.56  ██████████  *most expensive*
+
+── code_quality (1-10) ────────────────────────────────────────
+
+  model=sonnet, devs=3    7.8 ± 0.9  ████████░░  *best*
+  model=sonnet, devs=5    7.6 ± 1.1  ████████░░
+  model=qwen, devs=3      6.2 ± 1.3  ██████░░░░
+  model=qwen, devs=2      5.4 ± 1.5  █████░░░░░
+
+── Pareto front (cost vs quality) ─────────────────────────────
+
+  ★ hierarchy, devs=3, qwen:   $0.61, quality 6.2 (best cost/quality ratio)
+  ★ hierarchy, devs=3, sonnet: $2.14, quality 7.8 (best quality)
+  ★ hierarchy, devs=2, qwen:   $0.42, quality 5.4 (cheapest)
+
+── Summary ────────────────────────────────────────────────────
+
+  Hierarchy topology significantly outperforms star and full_mesh on
+  completion time (p<0.05). 3 developers is the sweet spot — 2 is too
+  few (quality drops), 5 adds cost without quality gain. Sonnet produces
+  ~25% higher quality code than Qwen but at 3.5× the cost. For budget-
+  conscious runs, hierarchy + 3 Qwen developers is optimal. For quality-
+  critical work, hierarchy + 3 Sonnet developers.
+```
+
+---
+
+## 3.3 — Protocol System
+
+Формальные state machines для взаимодействия Cell'ов. Не ad-hoc "send any message" а структурированные протоколы.
+
+### Protocol definitions
+
+```typescript
+// Protocol = state machine definition
+interface Protocol {
+  name: string
+  roles: string[]                    // e.g. ['requester', 'provider']
+  states: ProtocolState[]
+  transitions: ProtocolTransition[]
+  timeout: number                    // ms
+}
+
+interface ProtocolState {
+  name: string
+  terminal?: boolean                 // is this a final state?
+  onEnter?: Action                   // side effect
+}
+
+interface ProtocolTransition {
+  from: string
+  to: string
+  trigger: string                    // message type
+  role: string                       // who sends the trigger
+  guard?: string                     // condition expression
+}
+```
+
+### Built-in protocols
+
+**Contract Protocol** (parent delegates work to child):
+
+```
+States: idle → proposed → negotiating → accepted → executing → delivered → evaluated
+Roles: requester (parent), provider (child)
+
+  requester                    provider
+     │                            │
+     │── propose(task, budget) ──→│
+     │                            │
+     │←── accept / negotiate ─────│
+     │                            │
+     │── confirm ────────────────→│
+     │                            │
+     │        [provider works]    │
+     │                            │
+     │←── deliver(result) ────────│
+     │                            │
+     │── evaluate(pass/fail) ────→│
+     │                            │
+```
+
+```yaml
+# In topology definition:
+topology:
+  type: custom
+  routes:
+    - from: architect
+      to: developer
+      protocol: contract
+```
+
+Cell-runtime enforces: developer can only send messages matching current protocol state. If protocol is in `executing` state, developer can only send `deliver` or `progress_update`, not random messages.
+
+**Deliberation Protocol** (group decision making):
+
+```
+States: idle → proposing → discussing → voting → resolved
+Roles: facilitator, participant (1..N)
+
+  facilitator           participant-1        participant-2
+     │                      │                     │
+     │── propose(topic) ──→ │ ──────────────────→ │
+     │                      │                     │
+     │←── argument ─────────│                     │
+     │←────────────────────────── argument ───────│
+     │                      │                     │
+     │── call_vote ────────→│ ──────────────────→ │
+     │                      │                     │
+     │←── vote(yes/no) ─────│                     │
+     │←──────────────────────────vote(yes/no) ────│
+     │                      │                     │
+     │── resolve(outcome) ─→│ ──────────────────→ │
+```
+
+**Auction Protocol** (competitive task assignment):
+
+```
+States: idle → announced → bidding → awarded → executing
+Roles: auctioneer, bidder (1..N)
+
+  auctioneer           bidder-1             bidder-2
+     │                    │                     │
+     │── announce(task) ──│────────────────────→│
+     │                    │                     │
+     │←── bid($, time) ───│                     │
+     │←─────────────────────── bid($, time) ────│
+     │                    │                     │
+     │── award(winner) ──→│────────────────────→│
+     │                    │                     │
+```
+
+**Gossip Protocol** (decentralized information spread):
+
+```
+No formal states — each Cell periodically:
+1. Pick random neighbor from topology
+2. Send known facts with TTL
+3. Receive neighbor's facts
+4. Merge, decrement TTL, discard expired
+
+Emergent: information propagates through network in O(log N) rounds.
+```
+
+### Protocol enforcement in cell-runtime
+
+```typescript
+class ProtocolEnforcer {
+  private sessions: Map<string, ProtocolSession> = new Map()
+
+  // Called when Cell tries to send a message
+  async validateMessage(from: string, to: string, message: Envelope): Promise<ValidationResult> {
+    const route = this.topology.getRoute(from, to)
+
+    if (!route) {
+      return { allowed: false, reason: 'No route in topology' }
+    }
+
+    if (!route.protocol) {
+      return { allowed: true }  // no protocol = free-form
+    }
+
+    const session = this.getOrCreateSession(from, to, route.protocol)
+    const transition = session.findTransition(message.type)
+
+    if (!transition) {
+      return {
+        allowed: false,
+        reason: `Protocol '${route.protocol}' in state '${session.currentState}' ` +
+                `does not allow message type '${message.type}'. ` +
+                `Allowed: ${session.allowedTransitions().join(', ')}`
+      }
+    }
+
+    session.advance(transition)
+    return { allowed: true, protocolState: session.currentState }
+  }
+}
+```
+
+Cell'у не нужно знать о протоколе напрямую — system prompt описывает workflow в natural language, а enforcer не даёт нарушить порядок. Если developer попытается отправить `deliver` до того как получил `confirm` — сообщение отклоняется и Cell получает ошибку с объяснением.
+
+### Stigmergy (indirect coordination)
+
+```yaml
+topology:
+  type: stigmergy
+  blackboard:
+    decayMinutes: 60
+    maxEntries: 1000
+```
+
+Нет прямых сообщений между Cell'ами. Вместо этого — shared blackboard:
+
+```typescript
+// Tools available in stigmergy topology
+const stigmergyTools = [
+  {
+    name: 'post_to_blackboard',
+    description: 'Post a message/artifact to the shared blackboard',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tag: { type: 'string', description: 'Category tag' },
+        content: { type: 'string' },
+        priority: { type: 'number', default: 1.0 }
+      }
+    }
+  },
+  {
+    name: 'read_blackboard',
+    description: 'Read recent entries from blackboard, optionally filtered by tag',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tag: { type: 'string', description: 'Filter by tag (optional)' },
+        limit: { type: 'number', default: 10 }
+      }
+    }
+  }
+]
+```
+
+Blackboard backed by NATS KV store. Entries decay (priority × age). Cell'ы координируются не через прямую коммуникацию, а через наблюдение за средой — как муравьи с феромонами.
+
+---
+
+## 3.4 — In-Process Runtime
+
+Для экспериментов с сотнями прогонов Pod'ы слишком медленные. In-process mode — Cell'ы как worker_threads в одном Node.js процессе.
+
+### Dual runtime architecture
+
+```typescript
+// packages/runtime/src/index.ts
+
+interface CellRuntime {
+  spawn(spec: CellSpec): Promise<RunningCell>
+  kill(cellId: string): Promise<void>
+  list(): Promise<RunningCell[]>
+  send(cellId: string, message: Envelope): Promise<void>
+}
+
+// Phase 1 runtime — K8s Pods
+class KubernetesRuntime implements CellRuntime {
+  async spawn(spec: CellSpec) {
+    // Create Cell CRD → operator creates Pod
+    await this.k8sClient.createCell(spec)
+  }
+}
+
+// Phase 3 runtime — worker_threads
+class InProcessRuntime implements CellRuntime {
+  private workers: Map<string, Worker> = new Map()
+
+  async spawn(spec: CellSpec) {
+    const worker = new Worker('./cell-worker.js', {
+      workerData: { spec, natsUrl: this.natsUrl }
+    })
+    this.workers.set(spec.metadata.name, worker)
+    // Worker connects to same NATS, same protocol
+  }
+}
+
+// Factory
+function createRuntime(mode: 'kubernetes' | 'in-process'): CellRuntime {
+  return mode === 'kubernetes'
+    ? new KubernetesRuntime(k8sConfig)
+    : new InProcessRuntime(natsUrl)
+}
+```
+
+### Experiment engine uses in-process by default
+
+```
+Experiment with runtime: in-process
+
+1. Experiment controller starts in kais-experiment-runner Pod
+2. For each run:
+   a. InProcessRuntime spawns N worker_threads
+   b. Workers connect to NATS (same NATS as production)
+   c. Workers execute Cell loop (receive → think → act → respond)
+   d. Mission checks run in main thread
+   e. Results collected
+   f. Workers terminated
+3. Next run starts
+4. After all runs: analysis
+```
+
+Performance comparison:
+
+| Metric | Kubernetes mode | In-process mode |
+|--------|----------------|-----------------|
+| Cell spawn time | 3–10 sec | 50–200 ms |
+| Memory per Cell | ~100 MB (Pod) | ~20 MB (thread) |
+| Max Cells per machine | ~100 (16GB) | ~500 (16GB) |
+| Isolation | Full (container) | Thread-level |
+| Network | Real Pod networking | In-process NATS |
+| Use case | Production | Experiments |
+
+### In-process NATS optimization
+
+Для in-process режима можно использовать NATS client в каждом worker_thread (они подключаются к тому же NATS серверу в кластере). Но для максимальной скорости — опциональный in-memory message bus:
+
+```typescript
+class InMemoryBus implements MessageBus {
+  private subscriptions: Map<string, Set<Handler>> = new Map()
+
+  async publish(subject: string, message: Envelope) {
+    const handlers = this.matchSubscriptions(subject)
+    // Direct function call, no network
+    await Promise.all([...handlers].map(h => h(message)))
+  }
+
+  subscribe(subject: string, handler: Handler): Subscription {
+    // Wildcard matching like NATS
+    if (!this.subscriptions.has(subject)) {
+      this.subscriptions.set(subject, new Set())
+    }
+    this.subscriptions.get(subject)!.add(handler)
+    return { unsubscribe: () => this.subscriptions.get(subject)?.delete(handler) }
+  }
+}
+```
+
+Used when experiment sets `runtime: in-process` AND `bus: in-memory` (vs default `bus: nats`). Removes network round-trip between Cells in same experiment run. LLM call latency still dominates, but for local models (Ollama) this makes a real difference.
+
+---
+
+## 3.5 — Experiment Runner Pod
+
+Experiments run as a special Pod in the cluster:
+
+```yaml
+apiVersion: kais.io/v1
+kind: Experiment
+metadata:
+  name: topology-comparison
+  namespace: experiments
+spec:
+  runtime: in-process  # Cell'ы как worker_threads внутри runner Pod
+  ...
+```
+
+Operator видит Experiment CRD → создаёт experiment-runner Pod:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: experiment-topology-comparison
+  namespace: experiments
+  ownerReferences:
+    - kind: Experiment
+      name: topology-comparison
+spec:
+  containers:
+    - name: runner
+      image: kais-experiment-runner:latest
+      env:
+        - name: EXPERIMENT_NAME
+          value: topology-comparison
+        - name: NATS_URL
+          value: nats://nats.kais-system:4222
+        - name: POSTGRES_URL
+          value: postgresql://...
+      envFrom:
+        - secretRef:
+            name: llm-credentials
+      resources:
+        requests:
+          memory: 2Gi      # needs more RAM for worker_threads
+          cpu: "2"
+        limits:
+          memory: 4Gi
+          cpu: "4"
+```
+
+Runner Pod:
+1. Reads Experiment spec from CRD
+2. Generates run matrix
+3. Estimates cost, validates budget
+4. Executes runs sequentially or parallel (up to `spec.parallel`)
+5. Each run: spawn in-process Cells → inject Mission → wait for completion → collect metrics
+6. After all runs: statistical analysis
+7. Writes results to Postgres + updates Experiment status
+
+---
+
+## DB schema additions
+
+```sql
+-- Experiment definition and status
+CREATE TABLE experiments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT 'default',
+  spec JSONB NOT NULL,
+  status JSONB NOT NULL DEFAULT '{"phase": "Pending"}',
+  analysis JSONB,                    -- final analysis results
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ,
+  UNIQUE(name, namespace)
+);
+
+-- Individual experiment runs
+CREATE TABLE experiment_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  experiment_id UUID REFERENCES experiments(id) ON DELETE CASCADE,
+  run_number INT NOT NULL,
+  variables JSONB NOT NULL,          -- {"topology": "hierarchy", "developer_count": 3, ...}
+  repeat_number INT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending | running | succeeded | failed
+  metrics JSONB,                     -- {"completion_time": 284, "total_cost": 2.14, ...}
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  error TEXT
+);
+
+CREATE INDEX idx_runs_experiment ON experiment_runs(experiment_id, status);
+
+-- Detailed traces per run (every Cell event)
+CREATE TABLE experiment_traces (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID REFERENCES experiment_runs(id) ON DELETE CASCADE,
+  cell_name TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  timestamp TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_traces_run ON experiment_traces(run_id, timestamp);
+
+-- Protocol sessions
+CREATE TABLE protocol_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  protocol_name TEXT NOT NULL,
+  from_cell TEXT NOT NULL,
+  to_cell TEXT NOT NULL,
+  current_state TEXT NOT NULL,
+  history JSONB NOT NULL DEFAULT '[]',   -- state transition log
+  formation_id UUID,
+  run_id UUID,                           -- if part of experiment
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+---
+
+## New CLI commands
+
+```bash
+# Experiments
+kais experiment run topology-comparison.yaml
+kais experiment list
+kais experiment status topology-comparison
+kais experiment results topology-comparison          # full report
+kais experiment results topology-comparison --metric completion_time --format csv
+kais experiment abort topology-comparison
+kais experiment cost-estimate topology-comparison.yaml   # dry run, show estimate
+
+# Replay (rerun specific variant)
+kais experiment rerun topology-comparison --run 35
+kais experiment rerun topology-comparison \
+  --variables '{"topology":"hierarchy","developer_count":3}' \
+  --repeats 10
+
+# Compare (ad-hoc comparison of two variants)
+kais experiment compare topology-comparison \
+  --a '{"topology":"hierarchy"}' \
+  --b '{"topology":"full_mesh"}' \
+  --metric completion_time
+
+# Protocol inspection
+kais protocol list                                    # show registered protocols
+kais protocol sessions -n project-x                   # active protocol sessions
+kais protocol trace session-abc-123                   # state transition log
+```
+
+---
+
+## Example: full Phase 3 workflow
+
+```bash
+# Write experiment spec
+$ cat topology-comparison.yaml
+apiVersion: kais.io/v1
+kind: Experiment
+metadata:
+  name: topology-comparison
+  namespace: experiments
+spec:
+  variables:
+    - name: topology
+      values: [hierarchy, star, full_mesh]
+    - name: developer_count
+      values: [2, 3]
+  repeats: 3
+  runtime: in-process
+  parallel: 2
+  template: ...
+  mission: ...
+  metrics: ...
+  budget:
+    maxTotalCost: 50.00
+
+# Estimate cost first
+$ kais experiment cost-estimate topology-comparison.yaml
+Experiment: topology-comparison
+  Variables: 3 topologies × 2 developer counts = 6 variants
+  Repeats: 3
+  Total runs: 18
+  Estimated cost per run: $1.80 (Claude Sonnet for architect+reviewer, Ollama for devs)
+  Estimated total: $32.40
+  Budget: $50.00 ✓
+
+# Launch
+$ kais experiment run topology-comparison.yaml
+experiment.kais.io/topology-comparison created
+Estimated: 18 runs, ~$32, ~45 minutes
+
+# Watch progress
+$ kais experiment status topology-comparison --watch
+Experiment: topology-comparison
+Phase: Running
+Progress: ████████████░░░░░░░░░ 12/18 runs (67%)
+Active: run-013 (hierarchy, devs=2, repeat=3), run-014 (star, devs=3, repeat=1)
+Cost: $21.45 / $50.00
+Time: 28m elapsed, ~14m remaining
+
+# Results
+$ kais experiment results topology-comparison
+
+Experiment: topology-comparison (18 runs, 17 succeeded, 1 failed)
+
+  completion_time:
+    hierarchy, devs=3:   241s ± 38   *best* (p=0.02 vs star)
+    star, devs=3:        298s ± 52
+    full_mesh, devs=3:   334s ± 71
+    hierarchy, devs=2:   287s ± 45
+    star, devs=2:        310s ± 48
+    full_mesh, devs=2:   356s ± 83
+
+  total_cost:
+    hierarchy, devs=2:   $1.23 ± 0.15   *cheapest*
+    hierarchy, devs=3:   $1.67 ± 0.22
+    ...
+
+  Recommendation: hierarchy with 3 developers offers best
+  time/cost trade-off. Full mesh adds overhead without benefit.
+```
+
+---
+
+## What Phase 3 does NOT include
+
+| Feature | Phase |
+|---------|-------|
+| Knowledge graph (cross-experiment learning) | 4 |
+| Blueprint templates | 4 |
+| Blueprint evolution (genetic algorithms) | 6 |
+| ClickHouse for traces (Postgres sufficient initially) | 5+ |
+| Distributed experiment runner (multi-node) | 7+ |
+| Web dashboard for experiment visualization | 7 |
+| Auto-suggest experiment variables | 8+ |
+
+---
+
+## Migration from Phase 2
+
+Additive changes only:
+- 1 new CRD: Experiment
+- 1 new controller: ExperimentController
+- 1 new container image: kais-experiment-runner
+- Protocol system added to cell-runtime (backwards compatible — no protocol = free-form)
+- InProcessRuntime added alongside existing KubernetesRuntime
+- New DB tables (no changes to existing)
+- New CLI commands
+
+All Phase 1–2 functionality unchanged.
