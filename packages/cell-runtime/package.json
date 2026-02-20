@@ -4,15 +4,26 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
-    "test": "echo 'No tests yet'",
+    "test": "vitest run",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@kais/core": "workspace:*"
+    "@kais/core": "workspace:*",
+    "@kais/mind": "workspace:*",
+    "nats": "^2.29.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0"
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }

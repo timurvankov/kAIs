@@ -33,10 +33,25 @@ importers:
       '@kais/core':
         specifier: workspace:*
         version: link:../core
+      '@kais/mind':
+        specifier: workspace:*
+        version: link:../mind
+      nats:
+        specifier: ^2.29.0
+        version: 2.29.3
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@22.19.11)
 
   packages/cli:
     dependencies:
@@ -607,6 +622,14 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
+  nats@2.29.3:
+    resolution: {integrity: sha512-tOQCRCwC74DgBTk4pWZ9V45sk4d7peoE2njVprMRCBXrhJ5q5cYM7i6W+Uvw2qUrcfOSnuisrX7bEx3b3Wx4QA==}
+    engines: {node: '>= 14.0.0'}
+
+  nkeys.js@1.1.0:
+    resolution: {integrity: sha512-tB/a0shZL5UZWSwsoeyqfTszONTt4k2YS0tuQioMOD180+MbombYVgzDUYHlx+gejYK6rgf08n/2Df99WY0Sxg==}
+    engines: {node: '>=10.0.0'}
+
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
@@ -730,6 +753,9 @@ packages:
   turbo@2.8.10:
     resolution: {integrity: sha512-OxbzDES66+x7nnKGg2MwBA1ypVsZoDTLHpeaP4giyiHSixbsiTaMyeJqbEyvBdp5Cm28fc+8GG6RdQtic0ijwQ==}
     hasBin: true
+
+  tweetnacl@1.0.3:
+    resolution: {integrity: sha512-6rt+RN7aOi1nGMyC4Xa5DdYiukl2UWCbcJft7YhxReBGQD7OAM8Pbxw6YMo4r2diNEA8FEmu32YOn9rhaiE5yw==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -1245,6 +1271,14 @@ snapshots:
 
   nanoid@3.3.11: {}
 
+  nats@2.29.3:
+    dependencies:
+      nkeys.js: 1.1.0
+
+  nkeys.js@1.1.0:
+    dependencies:
+      tweetnacl: 1.0.3
+
   node-domexception@1.0.0: {}
 
   node-fetch@2.7.0:
@@ -1365,6 +1399,8 @@ snapshots:
       turbo-linux-arm64: 2.8.10
       turbo-windows-64: 2.8.10
       turbo-windows-arm64: 2.8.10
+
+  tweetnacl@1.0.3: {}
 
   typescript@5.9.3: {}
 
