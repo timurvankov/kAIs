@@ -95,4 +95,7 @@ export const RetryStrategySchema = z.object({
   backoff: z.enum(['exponential', 'linear', 'constant']),
   baseDelayMs: z.number().int().positive(),
   maxDelayMs: z.number().int().positive(),
-});
+}).refine(
+  (data) => data.maxDelayMs >= data.baseDelayMs,
+  { message: 'maxDelayMs must be >= baseDelayMs' },
+);

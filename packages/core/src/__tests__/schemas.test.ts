@@ -6,6 +6,7 @@ import {
   EnvelopeSchema,
   MindSpecSchema,
   ResourceSpecSchema,
+  RetryStrategySchema,
   ToolSpecSchema,
 } from '../schemas.js';
 
@@ -265,5 +266,60 @@ describe('EnvelopeSchema', () => {
   it('accepts null payload', () => {
     const result = EnvelopeSchema.parse({ ...validEnvelope, payload: null });
     expect(result.payload).toBeNull();
+  });
+});
+
+describe('RetryStrategySchema', () => {
+  const validStrategy = {
+    maxRetries: 3,
+    backoff: 'exponential' as const,
+    baseDelayMs: 100,
+    maxDelayMs: 10000,
+  };
+
+  it('accepts a valid strategy', () => {
+    const result = RetryStrategySchema.parse(validStrategy);
+    expect(result.maxRetries).toBe(3);
+    expect(result.backoff).toBe('exponential');
+    expect(result.baseDelayMs).toBe(100);
+    expect(result.maxDelayMs).toBe(10000);
+  });
+
+  it('accepts maxDelayMs equal to baseDelayMs', () => {
+    const result = RetryStrategySchema.parse({
+      ...validStrategy,
+      baseDelayMs: 500,
+      maxDelayMs: 500,
+    });
+    expect(result.baseDelayMs).toBe(500);
+    expect(result.maxDelayMs).toBe(500);
+  });
+
+  it('rejects maxDelayMs less than baseDelayMs', () => {
+    expect(() =>
+      RetryStrategySchema.parse({
+        ...validStrategy,
+        baseDelayMs: 1000,
+        maxDelayMs: 500,
+      }),
+    ).toThrow('maxDelayMs must be >= baseDelayMs');
+  });
+
+  it('rejects negative maxRetries', () => {
+    expect(() =>
+      RetryStrategySchema.parse({ ...validStrategy, maxRetries: -1 }),
+    ).toThrow();
+  });
+
+  it('rejects non-positive baseDelayMs', () => {
+    expect(() =>
+      RetryStrategySchema.parse({ ...validStrategy, baseDelayMs: 0 }),
+    ).toThrow();
+  });
+
+  it('rejects invalid backoff type', () => {
+    expect(() =>
+      RetryStrategySchema.parse({ ...validStrategy, backoff: 'fibonacci' }),
+    ).toThrow();
   });
 });

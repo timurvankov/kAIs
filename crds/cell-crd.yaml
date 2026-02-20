@@ -23,6 +23,7 @@ spec:
               properties:
                 mind:
                   type: object
+                  x-kubernetes-preserve-unknown-fields: true
                   properties:
                     provider:
                       type: string

@@ -121,4 +121,31 @@ describe('Error hierarchy', () => {
     expect(new LLMError('d').retryable).toBe(false);
     expect(new ProtocolViolation('e').retryable).toBe(false);
   });
+
+  it('preserves error cause through the hierarchy', () => {
+    const rootCause = new TypeError('socket hang up');
+    const transient = new TransientError('network timeout', 'TRANSIENT', { cause: rootCause });
+    expect(transient.cause).toBe(rootCause);
+
+    const budget = new BudgetError('over budget', 'BUDGET_EXCEEDED', { cause: transient });
+    expect(budget.cause).toBe(transient);
+    expect((budget.cause as TransientError).cause).toBe(rootCause);
+
+    const tool = new ToolError('tool failed', 'TOOL_ERROR', { cause: rootCause });
+    expect(tool.cause).toBe(rootCause);
+
+    const llm = new LLMError('bad request', 'LLM_ERROR', { cause: rootCause });
+    expect(llm.cause).toBe(rootCause);
+
+    const proto = new ProtocolViolation('wrong state', 'PROTOCOL_VIOLATION', { cause: rootCause });
+    expect(proto.cause).toBe(rootCause);
+
+    const base = new KaisError('base', 'BASE', false, { cause: rootCause });
+    expect(base.cause).toBe(rootCause);
+  });
+
+  it('cause is undefined when not provided', () => {
+    const err = new TransientError('no cause');
+    expect(err.cause).toBeUndefined();
+  });
 });
