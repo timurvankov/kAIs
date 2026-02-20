@@ -1,0 +1,94 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cells.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Cell
+    plural: cells
+    singular: cell
+    shortNames: ["cl"]
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                mind:
+                  type: object
+                  properties:
+                    provider:
+                      type: string
+                      enum: ["anthropic", "openai", "ollama"]
+                    model:
+                      type: string
+                    systemPrompt:
+                      type: string
+                    temperature:
+                      type: number
+                    maxTokens:
+                      type: integer
+                  required: ["provider", "model", "systemPrompt"]
+                tools:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      config:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                resources:
+                  type: object
+                  properties:
+                    maxTokensPerTurn:
+                      type: integer
+                    maxCostPerHour:
+                      type: number
+                    maxTotalCost:
+                      type: number
+                    cpuLimit:
+                      type: string
+                    memoryLimit:
+                      type: string
+              required: ["mind"]
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Completed", "Failed", "Paused"]
+                podName:
+                  type: string
+                totalCost:
+                  type: number
+                totalTokens:
+                  type: integer
+                lastActive:
+                  type: string
+                  format: date-time
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Model
+          type: string
+          jsonPath: .spec.mind.model
+        - name: Cost
+          type: number
+          jsonPath: .status.totalCost
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

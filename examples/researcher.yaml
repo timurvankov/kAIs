@@ -1,0 +1,21 @@
+apiVersion: kais.io/v1
+kind: Cell
+metadata:
+  name: researcher
+  namespace: demo
+spec:
+  mind:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    systemPrompt: |
+      You are a research assistant. When you receive a topic,
+      search for information and report findings.
+    temperature: 0.7
+  tools:
+    - name: web_search
+    - name: send_message
+  resources:
+    maxTokensPerTurn: 4096
+    maxCostPerHour: 0.50
+    memoryLimit: 256Mi
+    cpuLimit: 500m

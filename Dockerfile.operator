@@ -1,0 +1,25 @@
+FROM node:22-slim AS base
+RUN corepack enable pnpm
+
+FROM base AS build
+WORKDIR /app
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/core/package.json packages/core/package.json
+COPY packages/operator/package.json packages/operator/package.json
+RUN pnpm install --frozen-lockfile
+COPY tsconfig.base.json ./
+COPY packages/core/ packages/core/
+COPY packages/operator/ packages/operator/
+RUN pnpm --filter @kais/core build && pnpm --filter @kais/operator build
+
+FROM base AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/packages/core/dist packages/core/dist
+COPY --from=build /app/packages/core/package.json packages/core/package.json
+COPY --from=build /app/packages/operator/dist packages/operator/dist
+COPY --from=build /app/packages/operator/package.json packages/operator/package.json
+COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
+USER node
+CMD ["node", "packages/operator/dist/index.js"]
