@@ -12,6 +12,7 @@ import { createWriteFileTool } from './tools/write-file.js';
 import { createBashTool } from './tools/bash.js';
 import type { Tool } from './tools/tool-executor.js';
 import type { CellSpec } from '@kais/core';
+import { initTelemetry, shutdownTelemetry } from '@kais/core';
 import { createTopologyEnforcer } from './topology/topology-enforcer.js';
 
 const CELL_NAME = process.env['CELL_NAME'] ?? '';
@@ -27,6 +28,9 @@ if (!CELL_NAME || !CELL_SPEC_JSON) {
 const spec: CellSpec = JSON.parse(CELL_SPEC_JSON);
 
 async function main() {
+  // Initialise OpenTelemetry (no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset)
+  initTelemetry({ serviceName: 'kais-cell' });
+
   // Connect to NATS
   const nc = await connect({ servers: NATS_URL });
   const nats: NatsConnection = {
@@ -157,6 +161,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     await runtime.stop();
+    await shutdownTelemetry();
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown());

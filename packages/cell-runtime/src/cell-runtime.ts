@@ -4,8 +4,9 @@
  * Receives messages via NATS, processes them with a Mind (LLM),
  * executes tools, and responds.
  */
-import { createEnvelope } from '@kais/core';
+import { createEnvelope, getTracer, getMeter } from '@kais/core';
 import type { CellSpec, Envelope } from '@kais/core';
+import { context, trace, SpanKind, SpanStatusCode, propagation } from '@opentelemetry/api';
 import type { Mind, Message, ContentBlock, ThinkOutput, ToolDefinition } from '@kais/mind';
 
 import { WorkingMemoryManager } from './memory/working-memory.js';
@@ -131,6 +132,15 @@ export class CellRuntime {
   private messageQueue: Envelope[] = [];
   private processing = false;
 
+  // --- OTel instrumentation ---
+  private readonly tracer;
+  private readonly llmCallsCounter;
+  private readonly tokensCounter;
+  private readonly costCounter;
+  private readonly messagesCounter;
+  private readonly llmLatencyHistogram;
+  private readonly toolLatencyHistogram;
+
   constructor(config: CellRuntimeConfig) {
     this.cellName = config.cellName;
     this.namespace = config.namespace;
@@ -162,6 +172,16 @@ export class CellRuntime {
       config.spec.resources?.maxCostPerHour,
       config.spec.resources?.maxTotalCost,
     );
+
+    // OTel tracer and metrics
+    this.tracer = getTracer('kais-cell');
+    const meter = getMeter('kais-cell');
+    this.llmCallsCounter = meter.createCounter('kais.cell.llm_calls');
+    this.tokensCounter = meter.createCounter('kais.cell.tokens');
+    this.costCounter = meter.createCounter('kais.cell.cost');
+    this.messagesCounter = meter.createCounter('kais.cell.messages');
+    this.llmLatencyHistogram = meter.createHistogram('kais.cell.llm_latency_ms');
+    this.toolLatencyHistogram = meter.createHistogram('kais.cell.tool_latency_ms');
   }
 
   /**
@@ -207,6 +227,40 @@ export class CellRuntime {
    * Process a single message (exposed for testing).
    */
   async processMessage(envelope: Envelope): Promise<void> {
+    // Extract trace context from envelope (W3C propagation)
+    const parentContext = envelope.traceContext
+      ? propagation.extract(context.active(), envelope.traceContext)
+      : context.active();
+
+    const span = this.tracer.startSpan('cell.handle_message', {
+      kind: SpanKind.SERVER,
+      attributes: {
+        'cell.name': this.cellName,
+        'message.type': envelope.type,
+        'message.from': envelope.from,
+      },
+    }, parentContext);
+
+    // Record received message metric
+    this.messagesCounter.add(1, { direction: 'received' });
+
+    return context.with(trace.setSpan(parentContext, span), async () => {
+      try {
+        await this.processMessageInner(envelope);
+        span.setStatus({ code: SpanStatusCode.OK });
+      } catch (err) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
+  }
+
+  /**
+   * Inner implementation of processMessage, runs within the OTel span context.
+   */
+  private async processMessageInner(envelope: Envelope): Promise<void> {
     // Check if paused
     if (this.paused) {
       this.publishOutbox({
@@ -258,15 +312,46 @@ export class CellRuntime {
       // Get tool definitions
       const tools: ToolDefinition[] = this.toolExecutor.getDefinitions();
 
-      // Call Mind.think()
+      // Call Mind.think() — wrapped in child span
       let thinkOutput: ThinkOutput;
       try {
-        thinkOutput = await this.mind.think({
-          messages,
-          tools: tools.length > 0 ? tools : undefined,
-          temperature: this.spec.mind.temperature,
-          maxTokens: this.spec.mind.maxTokens,
+        const llmStart = Date.now();
+        const llmSpan = this.tracer.startSpan('cell.llm_call', {
+          attributes: {
+            'llm.provider': this.spec.mind.provider,
+            'llm.model': this.spec.mind.model,
+          },
         });
+
+        try {
+          thinkOutput = await this.mind.think({
+            messages,
+            tools: tools.length > 0 ? tools : undefined,
+            temperature: this.spec.mind.temperature,
+            maxTokens: this.spec.mind.maxTokens,
+          });
+
+          const llmLatency = Date.now() - llmStart;
+
+          // Set span attributes after completion
+          llmSpan.setAttribute('llm.input_tokens', thinkOutput.usage.inputTokens);
+          llmSpan.setAttribute('llm.output_tokens', thinkOutput.usage.outputTokens);
+          llmSpan.setAttribute('llm.cost', thinkOutput.usage.cost);
+          llmSpan.setAttribute('llm.latency_ms', llmLatency);
+          llmSpan.setStatus({ code: SpanStatusCode.OK });
+
+          // Record metrics
+          this.llmCallsCounter.add(1);
+          this.tokensCounter.add(thinkOutput.usage.inputTokens, { direction: 'input' });
+          this.tokensCounter.add(thinkOutput.usage.outputTokens, { direction: 'output' });
+          this.costCounter.add(thinkOutput.usage.cost);
+          this.llmLatencyHistogram.record(llmLatency);
+        } catch (err) {
+          llmSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+          throw err;
+        } finally {
+          llmSpan.end();
+        }
       } catch (err) {
         const errorMsg: Message = {
           role: 'assistant',
@@ -297,10 +382,26 @@ export class CellRuntime {
         }
         this.workingMemory.addMessage({ role: 'assistant', content: assistantBlocks });
 
-        // Execute each tool call
+        // Execute each tool call — wrapped in child spans
         const toolResultBlocks: ContentBlock[] = [];
         for (const tc of thinkOutput.toolCalls) {
-          const result = await this.toolExecutor.execute(tc);
+          const toolStart = Date.now();
+          const toolSpan = this.tracer.startSpan('cell.tool_call', {
+            attributes: { 'tool.name': tc.name },
+          });
+
+          let result;
+          try {
+            result = await this.toolExecutor.execute(tc);
+            toolSpan.setStatus({ code: SpanStatusCode.OK });
+          } catch (err) {
+            toolSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+            throw err;
+          } finally {
+            this.toolLatencyHistogram.record(Date.now() - toolStart);
+            toolSpan.end();
+          }
+
           toolResultBlocks.push({
             type: 'tool_result',
             toolUseId: tc.id,
@@ -366,13 +467,21 @@ export class CellRuntime {
       ? message.content
       : message.content.map(b => b.text ?? b.content ?? '').join('');
 
+    // Inject current trace context into the outgoing envelope
+    const traceContext: Record<string, string> = {};
+    propagation.inject(context.active(), traceContext);
+
     const responseEnvelope = createEnvelope({
       from: this.cellName,
       to: sourceEnvelope.from,
       type: 'message',
       payload: { content },
       traceId: sourceEnvelope.traceId,
+      traceContext: Object.keys(traceContext).length > 0 ? traceContext : undefined,
     });
+
+    // Record sent message metric
+    this.messagesCounter.add(1, { direction: 'sent' });
 
     const data = new TextEncoder().encode(JSON.stringify(responseEnvelope));
     this.nats.publish(outboxSubject, data);
