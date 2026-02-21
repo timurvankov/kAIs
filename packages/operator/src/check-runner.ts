@@ -63,6 +63,7 @@ function compare(actual: number, operator: string, expected: number): boolean {
  * @param executor - Command executor abstraction
  * @param fs - Filesystem abstraction
  * @param nats - Optional NATS client for natsResponse checks
+ * @param since - Optional ISO timestamp to filter NATS messages (only messages after this time)
  */
 export async function runCheck(
   check: CompletionCheck,
@@ -70,6 +71,7 @@ export async function runCheck(
   executor: CommandExecutor,
   fs: FileSystem,
   nats?: NatsClient,
+  since?: string,
 ): Promise<CheckResult> {
   const span = tracer.startSpan('operator.run_checks', {
     attributes: {
@@ -90,7 +92,7 @@ export async function runCheck(
           result = await runCoverageCheck(check, workspacePath, executor);
           break;
         case 'natsResponse':
-          result = await runNatsResponseCheck(check, nats);
+          result = await runNatsResponseCheck(check, nats, since);
           break;
         default:
           result = {
@@ -281,6 +283,7 @@ async function runCoverageCheck(
 async function runNatsResponseCheck(
   check: CompletionCheck,
   nats?: NatsClient,
+  since?: string,
 ): Promise<CheckResult> {
   if (!nats) {
     return {
@@ -299,7 +302,7 @@ async function runNatsResponseCheck(
   }
 
   const timeoutMs = (check.timeoutSeconds ?? 30) * 1000;
-  const messages = await nats.waitForMessage(check.subject, timeoutMs);
+  const messages = await nats.waitForMessage(check.subject, timeoutMs, since);
 
   if (messages.length === 0) {
     return {

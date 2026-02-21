@@ -375,7 +375,7 @@ export class MissionController {
     const checkResults: MissionStatus['checks'] = [];
 
     for (const check of mission.spec.completion.checks) {
-      const result = await runCheck(check, this.workspacePath, this.executor, this.fs, this.nats);
+      const result = await runCheck(check, this.workspacePath, this.executor, this.fs, this.nats, status.startedAt);
       checkResults.push({
         name: result.name,
         status: result.status === 'Passed' ? 'Passed' : result.status === 'Error' ? 'Error' : 'Failed',

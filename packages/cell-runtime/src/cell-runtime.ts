@@ -20,6 +20,13 @@ import type { Tool } from './tools/tool-executor.js';
 export interface NatsConnection {
   publish(subject: string, data: Uint8Array): void;
   subscribe(subject: string, callback: (msg: NatsMessage) => void): NatsSubscription;
+  /** Subscribe via JetStream durable consumer. Messages are ack'd after callback returns. */
+  subscribeJetStream?(
+    stream: string,
+    subject: string,
+    consumerName: string,
+    callback: (msg: NatsMessage & { ack: () => void }) => Promise<void>,
+  ): NatsSubscription;
   drain(): Promise<void>;
 }
 
@@ -132,6 +139,9 @@ export class CellRuntime {
   private messageQueue: Envelope[] = [];
   private processing = false;
 
+  // Deduplication: track processed envelope IDs to avoid re-processing after restart
+  private processedIds = new Set<string>();
+
   // --- OTel instrumentation ---
   private readonly tracer;
   private readonly llmCallsCounter;
@@ -186,23 +196,60 @@ export class CellRuntime {
 
   /**
    * Start the runtime — subscribe to NATS inbox and begin processing.
+   * Uses JetStream durable consumer when available (survives restarts),
+   * falls back to core NATS subscription otherwise.
    */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
 
     const inboxSubject = `cell.${this.namespace}.${this.cellName}.inbox`;
+    const consumerName = `cell-${this.cellName}`;
 
-    this.subscription = this.nats.subscribe(inboxSubject, (msg: NatsMessage) => {
-      // Parse envelope and enqueue for serial processing
-      try {
-        const text = new TextDecoder().decode(msg.data);
-        const envelope = JSON.parse(text) as Envelope;
-        this.enqueueMessage(envelope);
-      } catch (err) {
-        this.publishEvent('error', { error: `Failed to parse message: ${String(err)}` });
-      }
-    });
+    if (this.nats.subscribeJetStream) {
+      // JetStream: durable consumer with ack-after-processing + dedup
+      this.subscription = this.nats.subscribeJetStream(
+        'CELL_INBOX',
+        inboxSubject,
+        consumerName,
+        async (msg) => {
+          try {
+            const text = new TextDecoder().decode(msg.data);
+            const envelope = JSON.parse(text) as Envelope;
+
+            // Dedup: skip already-processed messages (e.g. after pod restart)
+            if (this.processedIds.has(envelope.id)) {
+              console.log(`[${this.cellName}] Dedup: skipping already-processed message ${envelope.id}`);
+              msg.ack();
+              return;
+            }
+
+            console.log(`[${this.cellName}] Received message ${envelope.id} from ${envelope.from}: ${(typeof envelope.payload === 'string' ? envelope.payload : JSON.stringify(envelope.payload)).slice(0, 200)}`);
+
+            // Process synchronously before ack to guarantee at-least-once
+            await this.processMessage(envelope);
+            this.processedIds.add(envelope.id);
+            msg.ack();
+            console.log(`[${this.cellName}] Acked message ${envelope.id}`);
+          } catch (err) {
+            console.error(`[${this.cellName}] Error processing message: ${String(err)}`);
+            this.publishEvent('error', { error: `Failed to process message: ${String(err)}` });
+            // Don't ack — message will be redelivered
+          }
+        },
+      );
+    } else {
+      // Fallback: core NATS (no persistence, no dedup)
+      this.subscription = this.nats.subscribe(inboxSubject, (msg: NatsMessage) => {
+        try {
+          const text = new TextDecoder().decode(msg.data);
+          const envelope = JSON.parse(text) as Envelope;
+          this.enqueueMessage(envelope);
+        } catch (err) {
+          this.publishEvent('error', { error: `Failed to parse message: ${String(err)}` });
+        }
+      });
+    }
 
     this.publishEvent('started', { cellName: this.cellName });
   }
@@ -297,6 +344,7 @@ export class CellRuntime {
 
     while (iterations < maxIterations) {
       iterations++;
+      console.log(`[${this.cellName}] Agentic loop iteration ${iterations}/${maxIterations}`);
 
       // Check budget before each think call
       if (this.budget.isExceeded()) {
@@ -347,6 +395,7 @@ export class CellRuntime {
         });
 
         try {
+          console.log(`[${this.cellName}] Calling LLM (${this.spec.mind.provider}/${this.spec.mind.model}), ${messages.length} messages, ${tools.length} tools`);
           thinkOutput = await this.mind.think({
             messages,
             tools: tools.length > 0 ? tools : undefined,
@@ -355,6 +404,7 @@ export class CellRuntime {
           });
 
           const llmLatency = Date.now() - llmStart;
+          console.log(`[${this.cellName}] LLM responded in ${llmLatency}ms, stopReason=${thinkOutput.stopReason}, toolCalls=${thinkOutput.toolCalls?.length ?? 0}, tokens=${thinkOutput.usage.outputTokens}`);
 
           // Log the completion as a span event
           llmSpan.addEvent('gen_ai.content.completion', {
@@ -420,7 +470,9 @@ export class CellRuntime {
 
           let result;
           try {
+            console.log(`[${this.cellName}] Executing tool: ${tc.name}(${JSON.stringify(tc.input).slice(0, 200)})`);
             result = await this.toolExecutor.execute(tc);
+            console.log(`[${this.cellName}] Tool ${tc.name} result: ${(result.content ?? '').slice(0, 200)}${result.isError ? ' [ERROR]' : ''}`);
             toolSpan.setStatus({ code: SpanStatusCode.OK });
           } catch (err) {
             toolSpan.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
@@ -449,6 +501,7 @@ export class CellRuntime {
       }
 
       // end_turn or max_tokens — we're done
+      console.log(`[${this.cellName}] Final response (${thinkOutput.stopReason}): ${(thinkOutput.content ?? '').slice(0, 300)}`);
       const responseMsg: Message = {
         role: 'assistant',
         content: thinkOutput.content,

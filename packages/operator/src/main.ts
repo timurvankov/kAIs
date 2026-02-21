@@ -16,6 +16,7 @@ import { startHealthServer } from './health.js';
 import type {
   CellResource,
   CommandExecutor,
+  ExperimentResource,
   FileSystem,
   FormationResource,
   KubeClient,
@@ -387,6 +388,72 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
         // Best effort
       }
     },
+
+    // --- Experiments ---
+
+    async updateExperimentStatus(name, namespace, status) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let existing;
+        try {
+          existing = await customApi.getNamespacedCustomObject({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'experiments',
+            name,
+          });
+        } catch (err: unknown) {
+          if (httpStatus(err) === 404) {
+            console.log(`[kais-operator] experiment ${namespace}/${name} not found, skipping status update`);
+            return;
+          }
+          throw err;
+        }
+        (existing as Record<string, unknown>).status = status;
+        try {
+          await customApi.replaceNamespacedCustomObjectStatus({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'experiments',
+            name,
+            body: existing,
+          });
+          return;
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409 && attempt < 2) {
+            continue;
+          }
+          throw err;
+        }
+      }
+    },
+
+    async emitExperimentEvent(experiment, eventType, reason, message) {
+      const event: k8s.CoreV1Event = {
+        metadata: {
+          generateName: `${experiment.metadata.name}-`,
+          namespace: experiment.metadata.namespace,
+        },
+        involvedObject: {
+          apiVersion: 'kais.io/v1',
+          kind: 'Experiment',
+          name: experiment.metadata.name,
+          namespace: experiment.metadata.namespace,
+          uid: experiment.metadata.uid,
+        },
+        reason,
+        message,
+        type: eventType.includes('Failed') ? 'Warning' : 'Normal',
+        firstTimestamp: new Date(),
+        lastTimestamp: new Date(),
+      };
+      try {
+        await coreApi.createNamespacedEvent({ namespace: experiment.metadata.namespace, body: event });
+      } catch {
+        // Best effort
+      }
+    },
   };
 }
 
@@ -400,22 +467,30 @@ async function createNatsClient(): Promise<NatsClient> {
   const nc = await natsConnect({ servers: NATS_URL });
   console.log(`[kais-operator] Connected to NATS at ${NATS_URL}`);
 
-  // Set up JetStream stream for cell outbox messages so natsResponse checks
-  // can read messages published before the subscription was created.
+  // Set up JetStream streams for cell messaging.
   const jsm = await nc.jetstreamManager();
-  try {
-    await jsm.streams.info('CELL_OUTBOX');
-    console.log('[kais-operator] JetStream stream CELL_OUTBOX already exists');
-  } catch {
-    await jsm.streams.add({
-      name: 'CELL_OUTBOX',
-      subjects: ['cell.*.*.outbox'],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.Memory,
-      max_msgs_per_subject: 64,
-      max_age: 600_000_000_000, // 10 minutes in nanoseconds
-    });
-    console.log('[kais-operator] Created JetStream stream CELL_OUTBOX');
+
+  // CELL_INBOX — retains messages so cells can read them after startup.
+  // Uses duplicate_window for server-side deduplication via Nats-Msg-Id.
+  for (const [name, subjects] of [
+    ['CELL_INBOX', ['cell.*.*.inbox']],
+    ['CELL_OUTBOX', ['cell.*.*.outbox']],
+  ] as const) {
+    try {
+      await jsm.streams.info(name);
+      console.log(`[kais-operator] JetStream stream ${name} already exists`);
+    } catch {
+      await jsm.streams.add({
+        name,
+        subjects: [...subjects],
+        retention: RetentionPolicy.Limits,
+        storage: StorageType.Memory,
+        max_msgs_per_subject: 64,
+        max_age: 600_000_000_000, // 10 minutes in nanoseconds
+        duplicate_window: 600_000_000_000, // 10 min dedup window (nanos)
+      });
+      console.log(`[kais-operator] Created JetStream stream ${name}`);
+    }
   }
 
   const js = nc.jetstream();
@@ -433,18 +508,24 @@ async function createNatsClient(): Promise<NatsClient> {
         traceContext: Object.keys(traceCtx).length > 0 ? traceCtx : undefined,
       });
       const data = new TextEncoder().encode(JSON.stringify(envelope));
-      nc.publish(subject, data);
-      console.log(`[NATS] Published to ${subject}: ${message.slice(0, 100)}`);
+      // Publish via JetStream with Nats-Msg-Id for deduplication
+      await js.publish(subject, data, { msgID: envelope.id });
+      console.log(`[NATS] Published to ${subject} (msgId=${envelope.id}): ${message.slice(0, 100)}`);
     },
 
-    async waitForMessage(subject, timeoutMs) {
-      // Read all retained messages on this subject from the CELL_OUTBOX stream.
-      // The caller checks each message against success/fail patterns.
+    async waitForMessage(subject, timeoutMs, since) {
+      // Read messages on this subject from the CELL_OUTBOX stream.
+      // When `since` is provided, only messages published after that time are returned,
+      // preventing stale messages from previous runs from interfering.
       const messages: string[] = [];
       try {
-        const consumer = await js.consumers.get('CELL_OUTBOX', {
+        const consumerOpts: Record<string, unknown> = {
           filterSubjects: [subject],
-        });
+        };
+        if (since) {
+          consumerOpts.opt_start_time = since;
+        }
+        const consumer = await js.consumers.get('CELL_OUTBOX', consumerOpts);
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
           const remaining = deadline - Date.now();

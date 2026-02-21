@@ -181,3 +181,17 @@ releases:
               - name: Jaeger
                 type: jaeger
                 url: http://jaeger-query.kais-system:16686
+        dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: kais
+                orgId: 1
+                folder: kAIs
+                type: file
+                disableDeletion: false
+                editable: true
+                options:
+                  path: /var/lib/grafana/dashboards/kais
+        dashboardsConfigMaps:
+          kais: kais-grafana-dashboards

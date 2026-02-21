@@ -88,6 +88,10 @@ function createMockClient(): KubeClient & {
     ): Promise<void> {
       missionEvents.push({ mission, eventType, reason, message });
     },
+
+    // Stub methods required by KubeClient interface but not used by MissionController
+    async updateExperimentStatus(): Promise<void> {},
+    async emitExperimentEvent(): Promise<void> {},
   };
 }
 

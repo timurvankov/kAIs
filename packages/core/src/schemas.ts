@@ -306,3 +306,100 @@ export const MissionStatusSchema = z.object({
   message: z.string().optional(),
   traceContext: z.record(z.string(), z.string()).optional(),
 });
+
+// --- Experiment ---
+
+export const ExperimentVariableSchema = z.object({
+  name: z.string().min(1),
+  values: z.array(z.unknown()).min(1),
+});
+
+export const ExperimentMetricTypeSchema = z.enum([
+  'duration',
+  'sum',
+  'count',
+  'boolean',
+  'llm_judge',
+]);
+
+export const ExperimentLLMJudgeSchema = z.object({
+  provider: z.enum(['anthropic', 'openai', 'ollama']),
+  model: z.string().min(1),
+  prompt: z.string().min(1),
+});
+
+export const ExperimentMetricSchema = z.object({
+  name: z.string().min(1),
+  type: ExperimentMetricTypeSchema,
+  description: z.string().optional(),
+  source: z.string().optional(),
+  judge: ExperimentLLMJudgeSchema.optional(),
+}).refine(data => data.type !== 'llm_judge' || data.judge !== undefined, {
+  message: 'llm_judge metric requires judge configuration',
+});
+
+export const ExperimentRuntimeSchema = z.enum(['in-process', 'kubernetes']);
+
+export const ExperimentBudgetSchema = z.object({
+  maxTotalCost: z.number().positive(),
+  abortOnOverBudget: z.boolean().default(true),
+});
+
+export const ExperimentMissionSchema = z.object({
+  objective: z.string().min(1),
+  completion: MissionCompletionSchema,
+});
+
+export const ExperimentSpecSchema = z.object({
+  variables: z.array(ExperimentVariableSchema).min(1),
+  repeats: z.number().int().positive().default(3),
+  template: z.object({
+    kind: z.literal('Formation'),
+    spec: z.unknown(),
+  }),
+  mission: ExperimentMissionSchema,
+  metrics: z.array(ExperimentMetricSchema).min(1),
+  runtime: ExperimentRuntimeSchema.default('in-process'),
+  budget: ExperimentBudgetSchema,
+  parallel: z.number().int().positive().default(1),
+});
+
+// --- ExperimentStatus ---
+
+export const ExperimentPhaseSchema = z.enum([
+  'Pending',
+  'Running',
+  'Analyzing',
+  'Completed',
+  'Failed',
+  'Aborted',
+]);
+
+export const ExperimentRunStatusSchema = z.enum([
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
+]);
+
+export const ExperimentRunSchema = z.object({
+  id: z.string().min(1),
+  variables: z.record(z.string(), z.unknown()),
+  repeat: z.number().int().positive(),
+  phase: ExperimentRunStatusSchema,
+  cost: z.number().nonnegative().optional(),
+});
+
+export const ExperimentStatusSchema = z.object({
+  phase: ExperimentPhaseSchema,
+  totalRuns: z.number().int().nonnegative(),
+  completedRuns: z.number().int().nonnegative(),
+  failedRuns: z.number().int().nonnegative(),
+  estimatedCost: z.number().nonnegative().optional(),
+  actualCost: z.number().nonnegative(),
+  estimatedTimeRemaining: z.string().optional(),
+  currentRuns: z.array(ExperimentRunSchema).optional(),
+  analysis: z.unknown().optional(),
+  message: z.string().optional(),
+  suggestions: z.array(z.string()).optional(),
+});
