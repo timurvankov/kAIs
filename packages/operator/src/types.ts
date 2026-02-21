@@ -207,11 +207,11 @@ export interface NatsClient {
     message: string,
   ): Promise<void>;
 
-  /** Subscribe to a subject and wait for the first message within a timeout. Returns the payload string or null on timeout. */
+  /** Read all retained messages on a subject from JetStream. Returns array of payload strings. */
   waitForMessage(
     subject: string,
     timeoutMs: number,
-  ): Promise<string | null>;
+  ): Promise<string[]>;
 }
 
 /**

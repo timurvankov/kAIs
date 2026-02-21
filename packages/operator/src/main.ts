@@ -434,22 +434,25 @@ async function createNatsClient(): Promise<NatsClient> {
     },
 
     async waitForMessage(subject, timeoutMs) {
-      // Use JetStream ordered consumer to read retained messages (including
-      // those published before this call). DeliverPolicy.All ensures we get
-      // the first message on the subject even if it was published earlier.
+      // Read all retained messages on this subject from the CELL_OUTBOX stream.
+      // The caller checks each message against success/fail patterns.
+      const messages: string[] = [];
       try {
         const consumer = await js.consumers.get('CELL_OUTBOX', {
           filterSubjects: [subject],
         });
-        const msg = await consumer.next({ expires: timeoutMs });
-        if (msg) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+          const remaining = deadline - Date.now();
+          const msg = await consumer.next({ expires: Math.min(remaining, 2000) });
+          if (!msg) break; // no more messages
           msg.ack();
-          return new TextDecoder().decode(msg.data);
+          messages.push(new TextDecoder().decode(msg.data));
         }
       } catch {
         // Timeout or stream error
       }
-      return null;
+      return messages;
     },
   };
 }

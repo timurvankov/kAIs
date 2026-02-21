@@ -98,8 +98,8 @@ function createMockNats(): NatsClient & { sends: NatsSendCall[] } {
     async sendMessageToCell(cellName: string, namespace: string, message: string): Promise<void> {
       sends.push({ cellName, namespace, message });
     },
-    async waitForMessage(): Promise<string | null> {
-      return null;
+    async waitForMessage(): Promise<string[]> {
+      return [];
     },
   };
 }

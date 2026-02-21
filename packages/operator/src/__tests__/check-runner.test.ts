@@ -546,8 +546,8 @@ describe('runCheck - coverage', () => {
 function createMockNats(response: string | null = null): NatsClient {
   return {
     async sendMessageToCell(): Promise<void> {},
-    async waitForMessage(): Promise<string | null> {
-      return response;
+    async waitForMessage(): Promise<string[]> {
+      return response !== null ? [response] : [];
     },
   };
 }
@@ -603,7 +603,7 @@ describe('runCheck - natsResponse', () => {
     const result = await runCheck(check, '/workspace', executor, fs, nats);
 
     expect(result.status).toBe('Failed');
-    expect(result.output).toContain('did not match success pattern');
+    expect(result.output).toContain('none matched pattern');
   });
 
   it('fails when message matches fail pattern', async () => {
@@ -621,7 +621,7 @@ describe('runCheck - natsResponse', () => {
     const result = await runCheck(check, '/workspace', executor, fs, nats);
 
     expect(result.status).toBe('Failed');
-    expect(result.output).toContain('matched fail pattern');
+    expect(result.output).toContain('none matched pattern');
   });
 
   it('passes with raw (non-JSON) message when no patterns specified', async () => {

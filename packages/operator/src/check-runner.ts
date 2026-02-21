@@ -252,8 +252,8 @@ async function runCoverageCheck(
 }
 
 /**
- * natsResponse check: subscribe to a NATS subject and wait for a message
- * matching the success/fail patterns.
+ * natsResponse check: read all retained messages on a NATS subject and check
+ * each one against success/fail patterns (case-insensitive).
  */
 async function runNatsResponseCheck(
   check: CompletionCheck,
@@ -276,9 +276,9 @@ async function runNatsResponseCheck(
   }
 
   const timeoutMs = (check.timeoutSeconds ?? 30) * 1000;
-  const raw = await nats.waitForMessage(check.subject, timeoutMs);
+  const messages = await nats.waitForMessage(check.subject, timeoutMs);
 
-  if (raw === null) {
+  if (messages.length === 0) {
     return {
       name: check.name,
       status: 'Failed',
@@ -286,44 +286,56 @@ async function runNatsResponseCheck(
     };
   }
 
-  // Try to extract payload.content from envelope, fall back to raw string
-  let content = raw;
+  // Check each message against patterns (case-insensitive).
+  // Return Passed on the first message that matches successPattern (and doesn't match failPattern).
+  const failRegex = check.failPattern ? new RegExp(check.failPattern, 'i') : null;
+  const successRegex = check.successPattern ? new RegExp(check.successPattern, 'i') : null;
+
+  for (const raw of messages) {
+    // Try to extract payload.content from envelope, fall back to raw string
+    let content = raw;
+    try {
+      const envelope = JSON.parse(raw);
+      if (typeof envelope.payload?.content === 'string') {
+        content = envelope.payload.content;
+      }
+    } catch {
+      // Not JSON — use raw message
+    }
+
+    if (failRegex?.test(content)) {
+      continue; // skip messages matching fail pattern
+    }
+
+    if (successRegex && !successRegex.test(content)) {
+      continue; // skip messages not matching success pattern
+    }
+
+    return {
+      name: check.name,
+      status: 'Passed',
+      output: `Received response: ${content.slice(0, 200)}`,
+    };
+  }
+
+  // No message matched
+  const lastContent = extractContent(messages[messages.length - 1]!);
+  return {
+    name: check.name,
+    status: 'Failed',
+    output: `${messages.length} message(s) checked, none matched pattern "${check.successPattern ?? '*'}": last=${lastContent.slice(0, 200)}`,
+  };
+}
+
+/** Extract payload.content from a JSON envelope, or return raw string. */
+function extractContent(raw: string): string {
   try {
     const envelope = JSON.parse(raw);
     if (typeof envelope.payload?.content === 'string') {
-      content = envelope.payload.content;
+      return envelope.payload.content;
     }
   } catch {
-    // Not JSON — use raw message
+    // Not JSON
   }
-
-  // Check failPattern first
-  if (check.failPattern) {
-    const failRegex = new RegExp(check.failPattern);
-    if (failRegex.test(content)) {
-      return {
-        name: check.name,
-        status: 'Failed',
-        output: `Response matched fail pattern "${check.failPattern}"`,
-      };
-    }
-  }
-
-  // Check successPattern
-  if (check.successPattern) {
-    const successRegex = new RegExp(check.successPattern);
-    if (!successRegex.test(content)) {
-      return {
-        name: check.name,
-        status: 'Failed',
-        output: `Response did not match success pattern "${check.successPattern}": ${content.slice(0, 200)}`,
-      };
-    }
-  }
-
-  return {
-    name: check.name,
-    status: 'Passed',
-    output: `Received response: ${content.slice(0, 200)}`,
-  };
+  return raw;
 }
