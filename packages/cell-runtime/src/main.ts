@@ -187,10 +187,12 @@ async function main() {
   const KNOWLEDGE_URL = process.env['KNOWLEDGE_SERVICE_URL'];
   if (KNOWLEDGE_URL) {
     const { createRecallTool, createRememberTool, createCorrectTool } = await import('./tools/recall.js');
+    const graphId = process.env['KNOWLEDGE_GRAPH_ID'] || undefined;
     const knowledgeConfig = {
       knowledgeUrl: KNOWLEDGE_URL,
       cellName: CELL_NAME,
       namespace: CELL_NAMESPACE,
+      graphId,
     };
 
     if (allowedTools.some(t => t.name === 'recall') || allowedTools.length === 0) {
@@ -200,7 +202,7 @@ async function main() {
       tools.push(createRememberTool(knowledgeConfig));
     }
     if (allowedTools.some(t => t.name === 'correct') || allowedTools.length === 0) {
-      tools.push(createCorrectTool({ knowledgeUrl: KNOWLEDGE_URL }));
+      tools.push(createCorrectTool({ knowledgeUrl: KNOWLEDGE_URL, graphId }));
     }
   }
 

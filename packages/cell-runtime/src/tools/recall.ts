@@ -4,6 +4,7 @@ export interface KnowledgeToolConfig {
   knowledgeUrl: string;
   cellName: string;
   namespace: string;
+  graphId?: string;
 }
 
 const SCOPE_MAP: Record<string, string> = {
@@ -44,6 +45,7 @@ export function createRecallTool(config: KnowledgeToolConfig): Tool {
             cell_id: level === 'cell' ? config.cellName : undefined,
           },
           max_results: 10,
+          graph_id: config.graphId,
         }),
       });
 
@@ -98,6 +100,7 @@ export function createRememberTool(config: KnowledgeToolConfig): Tool {
           source: { type: 'explicit_remember' },
           confidence,
           tags,
+          graph_id: config.graphId,
         }),
       });
 
@@ -108,7 +111,7 @@ export function createRememberTool(config: KnowledgeToolConfig): Tool {
   };
 }
 
-export function createCorrectTool(config: { knowledgeUrl: string }): Tool {
+export function createCorrectTool(config: { knowledgeUrl: string; graphId?: string }): Tool {
   return {
     name: 'correct',
     description: 'Invalidate a previous fact that turned out to be wrong.',
@@ -126,7 +129,7 @@ export function createCorrectTool(config: { knowledgeUrl: string }): Tool {
       const res = await fetch(`${config.knowledgeUrl}/correct`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fact_id: factId, reason }),
+        body: JSON.stringify({ fact_id: factId, reason, graph_id: config.graphId }),
       });
 
       if (!res.ok) return `Knowledge service error: ${res.status}`;

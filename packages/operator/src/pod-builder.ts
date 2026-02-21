@@ -112,6 +112,7 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
               name: 'KNOWLEDGE_SERVICE_URL',
               value: 'http://kais-knowledge.kais-system:8000',
             },
+            { name: 'KNOWLEDGE_GRAPH_ID', value: '' },
           ],
           envFrom: [{ secretRef: { name: 'llm-credentials', optional: true } }],
           resources: {

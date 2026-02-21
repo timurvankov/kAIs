@@ -60,6 +60,29 @@ describe('recall tool', () => {
     const result = await tool.execute({ query: 'test' });
     expect(result).toContain('error');
   });
+
+  it('includes graph_id in recall request when configured', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [],
+    });
+
+    const tool = createRecallTool({
+      knowledgeUrl: 'http://knowledge:8000',
+      cellName: 'test',
+      namespace: 'default',
+      graphId: 'trading-kg',
+    });
+
+    await tool.execute({ query: 'test' });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://knowledge:8000/recall',
+      expect.objectContaining({
+        body: expect.stringContaining('"graph_id":"trading-kg"'),
+      }),
+    );
+  });
 });
 
 describe('remember tool', () => {
