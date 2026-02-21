@@ -12,12 +12,12 @@ echo "Project root: $PROJECT_ROOT"
 
 # 1. Apply CRDs
 echo "--- Applying CRDs ---"
-kubectl apply -f "$PROJECT_ROOT/crds/"
+kubectl apply -f "$PROJECT_ROOT/deploy/crds/"
 
 # 2. Build and load Docker images into kind
 echo "--- Building Docker images ---"
-docker build -t kais-operator:e2e -f "$PROJECT_ROOT/Dockerfile.operator" "$PROJECT_ROOT"
-docker build -t kais-cell:e2e -f "$PROJECT_ROOT/Dockerfile.cell" "$PROJECT_ROOT"
+docker build -t kais-operator:e2e -f "$PROJECT_ROOT/docker/Dockerfile.operator" "$PROJECT_ROOT"
+docker build -t kais-cell:e2e -f "$PROJECT_ROOT/docker/Dockerfile.cell" "$PROJECT_ROOT"
 
 echo "--- Loading images into kind ---"
 kind load docker-image kais-operator:e2e --name="${KIND_CLUSTER_NAME:-kais-test}"
@@ -26,7 +26,7 @@ kind load docker-image kais-cell:e2e --name="${KIND_CLUSTER_NAME:-kais-test}"
 # 3. Deploy infrastructure via helmfile
 echo "--- Deploying infrastructure ---"
 if command -v helmfile &>/dev/null; then
-  cd "$PROJECT_ROOT" && helmfile apply
+  cd "$PROJECT_ROOT" && helmfile -f deploy/helmfile.yaml apply
 else
   echo "helmfile not found — deploying manually"
   # Postgres

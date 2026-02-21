@@ -65,16 +65,16 @@ pnpm run build
 
 ```bash
 # Apply CRDs
-kubectl apply -f crds/
+kubectl apply -f deploy/crds/
 
 # Deploy infrastructure (Postgres, NATS)
-helmfile apply
+helmfile -f deploy/helmfile.yaml apply
 
 # Deploy operator
-helm install kais-operator helm/kais-operator
+helm install kais-operator deploy/helm/kais-operator
 
 # Deploy API server
-helm install kais-api helm/kais-api
+helm install kais-api deploy/helm/kais-api
 ```
 
 ### Create Your First Cell

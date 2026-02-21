@@ -4,7 +4,7 @@
 docker_build(
     'kais-operator',
     '.',
-    dockerfile='Dockerfile.operator',
+    dockerfile='docker/Dockerfile.operator',
     live_update=[
         sync('packages/core/src', '/app/packages/core/src'),
         sync('packages/operator/src', '/app/packages/operator/src'),
@@ -16,7 +16,7 @@ docker_build(
 docker_build(
     'kais-cell',
     '.',
-    dockerfile='Dockerfile.cell',
+    dockerfile='docker/Dockerfile.cell',
     live_update=[
         sync('packages/core/src', '/app/packages/core/src'),
         sync('packages/mind/src', '/app/packages/mind/src'),
@@ -26,7 +26,7 @@ docker_build(
 )
 
 # Apply CRDs
-k8s_yaml('crds/cell-crd.yaml')
+k8s_yaml('deploy/crds/cell-crd.yaml')
 
 # Deploy operator via Helm (when chart is ready)
 # k8s_yaml(helm('helm/kais-operator'))

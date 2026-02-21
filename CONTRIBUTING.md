@@ -28,8 +28,11 @@ packages/
   mind/           # LLM provider abstraction
   api/            # REST/WS API server
   cli/            # kais CLI tool
-crds/             # Kubernetes CRD definitions
-helm/             # Helm charts
+deploy/
+  crds/           # Kubernetes CRD definitions
+  helm/           # Helm charts
+  helmfile.yaml   # Helmfile for deploying infrastructure
+docker/           # Dockerfiles for operator and cell runtime
 tests/
   integration/    # Cross-package tests (Postgres + NATS)
   e2e/            # End-to-end tests (kind cluster + Ollama)
@@ -61,8 +64,8 @@ docker run -d --name kais-nats -p 4222:4222 \
 
 # Initialize schema
 PGPASSWORD=test psql -h localhost -U postgres -d kais_test \
-  -f helm/kais-infra/sql/init.sql \
-  -f helm/kais-infra/sql/phase2.sql
+  -f deploy/helm/kais-infra/sql/init.sql \
+  -f deploy/helm/kais-infra/sql/phase2.sql
 
 # Run tests
 POSTGRES_URL=postgres://postgres:test@localhost:5432/kais_test \
@@ -109,15 +112,15 @@ Each package runs `tsc --noEmit`. Fix type errors before pushing.
 ## Building Docker Images
 
 ```bash
-docker build -f Dockerfile.operator -t kais-operator .
-docker build -f Dockerfile.cell -t kais-cell .
+docker build -f docker/Dockerfile.operator -t kais-operator .
+docker build -f docker/Dockerfile.cell -t kais-cell .
 ```
 
 ## Pull Requests
 
 - All PRs target `main`
 - CI must pass (unit + integration + e2e)
-- Changes to `.github/`, `crds/`, or `helmfile.yaml` require owner review (CODEOWNERS)
+- Changes to `.github/`, `deploy/`, or `docker/` require owner review (CODEOWNERS)
 - LLM smoke tests run only on `main` merges
 
 ## Architecture Decisions
