@@ -49,6 +49,7 @@ class AddFactRequest(BaseModel):
     source: FactSource
     confidence: float = Field(ge=0, le=1, default=0.5)
     tags: list[str] = []
+    graph_id: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -57,8 +58,10 @@ class SearchRequest(BaseModel):
     max_results: int = 20
     min_confidence: float = 0.0
     include_invalidated: bool = False
+    graph_id: str | None = None
 
 
 class InvalidateRequest(BaseModel):
     fact_id: str
     reason: str
+    graph_id: str | None = None
