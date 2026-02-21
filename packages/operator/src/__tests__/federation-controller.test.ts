@@ -49,7 +49,7 @@ function makeFederation(
     spec: {
       clusters,
       scheduling: {
-        strategy: 'round-robin',
+        strategy: 'round_robin',
       },
       natsLeafnodePort: 7422,
     },
