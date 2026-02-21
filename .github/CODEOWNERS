@@ -1,0 +1,5 @@
+# CI/CD and infrastructure changes require owner review
+.github/ @timurvankov
+helmfile.yaml @timurvankov
+crds/ @timurvankov
+docker-compose*.yml @timurvankov

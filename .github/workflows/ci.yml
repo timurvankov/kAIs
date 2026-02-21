@@ -101,6 +101,7 @@ jobs:
   llm-smoke:
     name: LLM Smoke Tests
     if: github.ref == 'refs/heads/main'
+    environment: production
     runs-on: ubuntu-latest
     needs: unit
     steps:
