@@ -184,6 +184,14 @@ spec:
           env:
             - name: NAMESPACE
               value: default
+            - name: CELL_IMAGE
+              value: kais-cell:e2e
+            - name: CELL_IMAGE_PULL_POLICY
+              value: Never
+            - name: NATS_URL
+              value: nats://kais-nats:4222
+            - name: POSTGRES_URL
+              value: postgresql://postgres:kais@kais-postgres-postgresql:5432/kais
 EOF
 
 echo "--- Waiting for operator pod ---"

@@ -139,7 +139,7 @@ describe('buildCellPod', () => {
     const container = pod.spec?.containers?.[0];
     const env = container?.env?.find((e) => e.name === 'NATS_URL');
 
-    expect(env?.value).toBe('nats://nats.kais-system:4222');
+    expect(env?.value).toBe('nats://kais-nats:4222');
   });
 
   it('sets POSTGRES_URL env var', () => {
@@ -149,7 +149,7 @@ describe('buildCellPod', () => {
     const env = container?.env?.find((e) => e.name === 'POSTGRES_URL');
 
     expect(env?.value).toBe(
-      'postgresql://postgres:kais@postgres-postgresql.kais-system:5432/kais',
+      'postgresql://postgres:kais@kais-postgres-postgresql:5432/kais',
     );
   });
 
@@ -159,7 +159,7 @@ describe('buildCellPod', () => {
     const container = pod.spec?.containers?.[0];
 
     expect(container?.envFrom).toEqual([
-      { secretRef: { name: 'llm-credentials' } },
+      { secretRef: { name: 'llm-credentials', optional: true } },
     ]);
   });
 

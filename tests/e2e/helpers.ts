@@ -13,6 +13,12 @@ const CRD_GROUP = 'kais.io';
 const CRD_VERSION = 'v1';
 const NAMESPACE = 'default';
 
+/** Extract HTTP status code from @kubernetes/client-node errors (v0.x and v1.x). */
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { statusCode?: number; response?: { statusCode?: number } };
+  return e.statusCode ?? e.response?.statusCode;
+}
+
 /**
  * Apply a Cell CRD to the cluster.
  */
@@ -29,8 +35,7 @@ export async function applyCell(cell: Record<string, unknown>): Promise<void> {
     });
     console.log(`[applyCell] Cell "${name}" created`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 409) {
+    if (httpStatus(err) === 409) {
       console.log(`[applyCell] Cell "${name}" already exists, replacing...`);
       await customApi.replaceNamespacedCustomObject({
         group: CRD_GROUP,
@@ -64,8 +69,7 @@ export async function applyFormation(formation: Record<string, unknown>): Promis
     });
     console.log(`[applyFormation] Formation "${name}" created`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 409) {
+    if (httpStatus(err) === 409) {
       console.log(`[applyFormation] Formation "${name}" already exists, replacing...`);
       await customApi.replaceNamespacedCustomObject({
         group: CRD_GROUP,
@@ -98,8 +102,7 @@ export async function deleteCell(name: string): Promise<void> {
     });
     console.log(`[deleteCell] Cell "${name}" deleted`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 404) {
+    if (httpStatus(err) === 404) {
       console.log(`[deleteCell] Cell "${name}" not found (already deleted)`);
     } else {
       throw err;
@@ -122,8 +125,7 @@ export async function deleteFormation(name: string): Promise<void> {
     });
     console.log(`[deleteFormation] Formation "${name}" deleted`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 404) {
+    if (httpStatus(err) === 404) {
       console.log(`[deleteFormation] Formation "${name}" not found (already deleted)`);
     } else {
       throw err;
@@ -148,8 +150,7 @@ export async function getCustomResource(
     });
     return res as Record<string, unknown>;
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 404) return null;
+    if (httpStatus(err) === 404) return null;
     throw err;
   }
 }
@@ -227,8 +228,7 @@ export async function applyMission(mission: Record<string, unknown>): Promise<vo
     });
     console.log(`[applyMission] Mission "${name}" created`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 409) {
+    if (httpStatus(err) === 409) {
       console.log(`[applyMission] Mission "${name}" already exists, replacing...`);
       await customApi.replaceNamespacedCustomObject({
         group: CRD_GROUP,
@@ -261,8 +261,7 @@ export async function deleteMission(name: string): Promise<void> {
     });
     console.log(`[deleteMission] Mission "${name}" deleted`);
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 404) {
+    if (httpStatus(err) === 404) {
       console.log(`[deleteMission] Mission "${name}" not found (already deleted)`);
     } else {
       throw err;
@@ -347,8 +346,7 @@ export async function getConfigMap(name: string): Promise<k8s.V1ConfigMap | null
   try {
     return await coreApi.readNamespacedConfigMap({ namespace: NAMESPACE, name });
   } catch (err: unknown) {
-    const e = err as { response?: { statusCode?: number } };
-    if (e.response?.statusCode === 404) return null;
+    if (httpStatus(err) === 404) return null;
     throw err;
   }
 }

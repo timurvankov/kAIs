@@ -2,6 +2,12 @@ import type * as k8s from '@kubernetes/client-node';
 
 import type { CellResource } from './types.js';
 
+// Configurable via environment variables on the operator deployment
+const CELL_IMAGE = process.env['CELL_IMAGE'] ?? 'kais-cell:latest';
+const CELL_IMAGE_PULL_POLICY = (process.env['CELL_IMAGE_PULL_POLICY'] ?? 'IfNotPresent') as 'Always' | 'Never' | 'IfNotPresent';
+const NATS_URL = process.env['NATS_URL'] ?? 'nats://kais-nats:4222';
+const POSTGRES_URL = process.env['POSTGRES_URL'] ?? 'postgresql://postgres:kais@kais-postgres-postgresql:5432/kais';
+
 /**
  * Build a K8s Pod spec from a Cell CRD.
  *
@@ -88,19 +94,16 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
       containers: [
         {
           name: 'mind',
-          image: 'kais-cell:latest',
+          image: CELL_IMAGE,
+          imagePullPolicy: CELL_IMAGE_PULL_POLICY,
           env: [
             { name: 'CELL_NAME', value: cell.metadata.name },
             { name: 'CELL_NAMESPACE', value: cell.metadata.namespace },
             { name: 'CELL_SPEC', value: JSON.stringify(cell.spec) },
-            { name: 'NATS_URL', value: 'nats://nats.kais-system:4222' },
-            {
-              name: 'POSTGRES_URL',
-              value:
-                'postgresql://postgres:kais@postgres-postgresql.kais-system:5432/kais',
-            },
+            { name: 'NATS_URL', value: NATS_URL },
+            { name: 'POSTGRES_URL', value: POSTGRES_URL },
           ],
-          envFrom: [{ secretRef: { name: 'llm-credentials' } }],
+          envFrom: [{ secretRef: { name: 'llm-credentials', optional: true } }],
           resources: {
             requests: { memory: '128Mi', cpu: '100m' },
             limits: {

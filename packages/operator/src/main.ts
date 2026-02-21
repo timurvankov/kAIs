@@ -24,6 +24,16 @@ const CRD_GROUP = 'kais.io';
 const CRD_VERSION = 'v1';
 
 // ---------------------------------------------------------------------------
+// Helper: extract HTTP status code from @kubernetes/client-node errors.
+// v1.x puts statusCode directly on the error; v0.x nests under response.
+// ---------------------------------------------------------------------------
+
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { statusCode?: number; response?: { statusCode?: number } };
+  return e.statusCode ?? e.response?.statusCode;
+}
+
+// ---------------------------------------------------------------------------
 // Real KubeClient implementation using @kubernetes/client-node
 // ---------------------------------------------------------------------------
 
@@ -38,8 +48,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
       try {
         return await coreApi.readNamespacedPod({ name, namespace });
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode === 404) return null;
+        if (httpStatus(err) === 404) return null;
         throw err;
       }
     },
@@ -55,8 +64,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
       try {
         await coreApi.deleteNamespacedPod({ name, namespace });
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode !== 404) throw err;
+        if (httpStatus(err) !== 404) throw err;
       }
     },
 
@@ -77,8 +85,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
         });
         return res as unknown as CellResource;
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode === 404) return null;
+        if (httpStatus(err) === 404) return null;
         throw err;
       }
     },
@@ -123,8 +130,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
           name,
         });
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode !== 404) throw err;
+        if (httpStatus(err) !== 404) throw err;
       }
     },
 
@@ -207,8 +213,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
           body: pvc,
         });
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode !== 409) throw err;
+        if (httpStatus(err) !== 409) throw err;
         // Already exists — fine
       }
     },
@@ -217,8 +222,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
       try {
         return await coreApi.readNamespacedPersistentVolumeClaim({ name, namespace });
       } catch (err: unknown) {
-        const e = err as { response?: { statusCode?: number } };
-        if (e.response?.statusCode === 404) return null;
+        if (httpStatus(err) === 404) return null;
         throw err;
       }
     },
