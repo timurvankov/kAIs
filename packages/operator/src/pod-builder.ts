@@ -7,9 +7,64 @@ import type { CellResource } from './types.js';
  *
  * The Pod runs the cell-runtime container with environment variables
  * that configure the Cell's mind, tools, and resource limits.
+ *
+ * When the Cell belongs to a Formation (has formationRef), additional
+ * volumes are mounted:
+ *   - workspace PVC at /workspace/shared and /workspace/private/{cellName}
+ *   - topology ConfigMap at /etc/kais/topology
  */
 export function buildCellPod(cell: CellResource): k8s.V1Pod {
   const podName = `cell-${cell.metadata.name}`;
+  const formationRef = cell.spec.formationRef;
+
+  const volumeMounts: k8s.V1VolumeMount[] = [];
+  const volumes: k8s.V1Volume[] = [];
+
+  // If this cell belongs to a formation, mount workspace and topology volumes
+  if (formationRef) {
+    volumeMounts.push(
+      {
+        name: 'workspace',
+        mountPath: '/workspace/shared',
+        subPath: 'shared',
+      },
+      {
+        name: 'workspace',
+        mountPath: `/workspace/private/${cell.metadata.name}`,
+        subPath: `private/${cell.metadata.name}`,
+      },
+      {
+        name: 'topology',
+        mountPath: '/etc/kais/topology',
+        readOnly: true,
+      },
+    );
+
+    volumes.push(
+      {
+        name: 'workspace',
+        persistentVolumeClaim: {
+          claimName: `workspace-${formationRef}`,
+        },
+      },
+      {
+        name: 'topology',
+        configMap: {
+          name: `topology-${formationRef}`,
+        },
+      },
+    );
+  }
+
+  const labels: Record<string, string> = {
+    'kais.io/cell': cell.metadata.name,
+    'kais.io/role': 'cell',
+  };
+
+  // Add formation label if this cell belongs to a formation
+  if (formationRef) {
+    labels['kais.io/formation'] = formationRef;
+  }
 
   return {
     apiVersion: 'v1',
@@ -17,10 +72,7 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
     metadata: {
       name: podName,
       namespace: cell.metadata.namespace,
-      labels: {
-        'kais.io/cell': cell.metadata.name,
-        'kais.io/role': 'cell',
-      },
+      labels,
       ownerReferences: [
         {
           apiVersion: 'kais.io/v1',
@@ -56,8 +108,10 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
               cpu: cell.spec.resources?.cpuLimit ?? '500m',
             },
           },
+          ...(volumeMounts.length > 0 ? { volumeMounts } : {}),
         },
       ],
+      ...(volumes.length > 0 ? { volumes } : {}),
       restartPolicy: 'Never', // operator handles restarts
     },
   };
