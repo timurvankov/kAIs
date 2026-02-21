@@ -141,7 +141,7 @@ describe('Recursive Ecosystem', () => {
 
   it('creates a 3-level recursive cell tree', async () => {
     // Create root
-    await applyCell('e2e-root', ROOT_CELL.spec);
+    await applyCell(ROOT_CELL);
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-root');
@@ -155,7 +155,7 @@ describe('Recursive Ecosystem', () => {
     expect(rootCr).toBeTruthy();
 
     // Create child with parentRef
-    await applyCell('e2e-child', CHILD_CELL.spec);
+    await applyCell(CHILD_CELL);
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-child');
@@ -165,7 +165,7 @@ describe('Recursive Ecosystem', () => {
     );
 
     // Create grandchild
-    await applyCell('e2e-grandchild', GRANDCHILD_CELL.spec);
+    await applyCell(GRANDCHILD_CELL);
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-grandchild');
@@ -186,7 +186,7 @@ describe('Recursive Ecosystem', () => {
 
   it('cascade deletes entire tree when root is removed', async () => {
     // Create root + child
-    await applyCell('e2e-root', ROOT_CELL.spec);
+    await applyCell(ROOT_CELL);
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-root');
@@ -195,7 +195,7 @@ describe('Recursive Ecosystem', () => {
       { timeoutMs: 60_000, label: 'root creation for cascade test' },
     );
 
-    await applyCell('e2e-child', CHILD_CELL.spec);
+    await applyCell(CHILD_CELL);
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-child');
