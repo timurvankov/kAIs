@@ -29,6 +29,7 @@ const CELL_SPEC = {
 
 describe('Formation Scaling', () => {
   afterEach(async () => {
+    console.log('[scaling] Cleaning up...');
     await deleteFormation('e2e-scale-formation');
     await waitFor(
       async () => {
@@ -40,6 +41,7 @@ describe('Formation Scaling', () => {
   });
 
   it('scales up when replicas are increased', async () => {
+    console.log('[test] === scale up ===');
     const formation = {
       apiVersion: 'kais.io/v1',
       kind: 'Formation',
@@ -52,16 +54,17 @@ describe('Formation Scaling', () => {
 
     await applyFormation(formation);
 
-    // Wait for initial cell
+    console.log('[test] Waiting for initial cell...');
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-scale-formation');
+        console.log(`[test] Cells: ${cells.length} (need 1)`);
         return cells.length === 1;
       },
       { timeoutMs: 60_000, label: 'initial cell creation' },
     );
 
-    // Scale up to 3 replicas by patching the formation
+    console.log('[test] Scaling from 1 to 3 replicas...');
     const currentFormation = await getCustomResource('formations', 'e2e-scale-formation');
     const spec = (currentFormation as Record<string, unknown>).spec as {
       cells: Array<{ name: string; replicas: number; spec: unknown }>;
@@ -83,10 +86,13 @@ describe('Formation Scaling', () => {
       },
     });
 
-    // Wait for 3 cells
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-scale-formation');
+        const names = cells.map(
+          (c) => ((c as Record<string, unknown>).metadata as { name: string }).name,
+        );
+        console.log(`[test] Cells after scale up: [${names.join(', ')}] (need 3)`);
         return cells.length === 3;
       },
       { timeoutMs: 60_000, label: 'scale up to 3 cells' },
@@ -101,9 +107,11 @@ describe('Formation Scaling', () => {
     expect(cellNames).toContain('worker-0');
     expect(cellNames).toContain('worker-1');
     expect(cellNames).toContain('worker-2');
+    console.log('[test] PASSED: scaled up to 3');
   });
 
   it('scales down when replicas are decreased', async () => {
+    console.log('[test] === scale down ===');
     const formation = {
       apiVersion: 'kais.io/v1',
       kind: 'Formation',
@@ -116,16 +124,17 @@ describe('Formation Scaling', () => {
 
     await applyFormation(formation);
 
-    // Wait for all 3 cells
+    console.log('[test] Waiting for initial 3 cells...');
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-scale-formation');
+        console.log(`[test] Cells: ${cells.length} (need 3)`);
         return cells.length === 3;
       },
       { timeoutMs: 60_000, label: 'initial 3 cells creation' },
     );
 
-    // Scale down to 1 replica
+    console.log('[test] Scaling from 3 to 1 replica...');
     const currentFormation = await getCustomResource('formations', 'e2e-scale-formation');
     const spec = (currentFormation as Record<string, unknown>).spec as {
       cells: Array<{ name: string; replicas: number; spec: unknown }>;
@@ -147,10 +156,13 @@ describe('Formation Scaling', () => {
       },
     });
 
-    // Wait for cells to be reduced to 1
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-scale-formation');
+        const names = cells.map(
+          (c) => ((c as Record<string, unknown>).metadata as { name: string }).name,
+        );
+        console.log(`[test] Cells after scale down: [${names.join(', ')}] (need 1)`);
         return cells.length === 1;
       },
       { timeoutMs: 60_000, label: 'scale down to 1 cell' },
@@ -160,5 +172,6 @@ describe('Formation Scaling', () => {
     expect(cells).toHaveLength(1);
     const cellName = ((cells[0] as Record<string, unknown>).metadata as { name: string }).name;
     expect(cellName).toBe('worker-0');
+    console.log('[test] PASSED: scaled down to 1');
   });
 });

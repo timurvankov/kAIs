@@ -9,6 +9,7 @@ import {
   deleteMission,
   waitFor,
   getCustomResource,
+  dumpClusterState,
 } from './helpers.js';
 
 const MISSION_CELL = {
@@ -66,33 +67,36 @@ const TEST_MISSION = {
 
 describe('Mission CRD Lifecycle', () => {
   afterEach(async () => {
+    console.log('[mission-lifecycle] Cleaning up...');
     await deleteMission('e2e-test-mission');
     await deleteCell('e2e-mission-cell');
   });
 
   it('creates a Mission CRD and transitions to Running', async () => {
+    console.log('[test] === Mission transitions to Running ===');
     await applyCell(MISSION_CELL);
 
-    // Wait for cell to be ready
+    console.log('[test] Waiting for cell to be Running...');
     await waitFor(
       async () => {
         const cell = await getCustomResource('cells', 'e2e-mission-cell');
         if (!cell) return false;
         const status = cell.status as { phase?: string } | undefined;
+        console.log(`[test] Cell status: phase=${status?.phase ?? 'none'}`);
         return status?.phase === 'Running';
       },
       { timeoutMs: 90_000, label: 'mission cell running' },
     );
 
-    // Apply mission
+    console.log('[test] Cell is Running. Applying Mission...');
     await applyMission(TEST_MISSION);
 
-    // Mission should transition from Pending to Running
     await waitFor(
       async () => {
         const mission = await getCustomResource('missions', 'e2e-test-mission');
         if (!mission) return false;
-        const status = mission.status as { phase?: string } | undefined;
+        const status = mission.status as { phase?: string; attempt?: number } | undefined;
+        console.log(`[test] Mission status: phase=${status?.phase ?? 'none'}, attempt=${status?.attempt ?? 0}`);
         return status?.phase === 'Running' || status?.phase === 'Succeeded';
       },
       { timeoutMs: 60_000, label: 'mission running' },
@@ -105,9 +109,11 @@ describe('Mission CRD Lifecycle', () => {
       attempt?: number;
     };
     expect(['Running', 'Succeeded']).toContain(status.phase);
+    console.log(`[test] PASSED: Mission phase=${status.phase}`);
   });
 
   it('Mission status includes attempt counter', async () => {
+    console.log('[test] === Mission attempt counter ===');
     await applyCell(MISSION_CELL);
 
     await waitFor(
@@ -119,13 +125,15 @@ describe('Mission CRD Lifecycle', () => {
       { timeoutMs: 90_000, label: 'mission cell running' },
     );
 
+    console.log('[test] Cell ready. Applying Mission...');
     await applyMission(TEST_MISSION);
 
     await waitFor(
       async () => {
         const mission = await getCustomResource('missions', 'e2e-test-mission');
         if (!mission) return false;
-        const status = mission.status as { attempt?: number } | undefined;
+        const status = mission.status as { phase?: string; attempt?: number } | undefined;
+        console.log(`[test] Mission: phase=${status?.phase ?? 'none'}, attempt=${status?.attempt ?? 0}`);
         return (status?.attempt ?? 0) >= 1;
       },
       { timeoutMs: 60_000, label: 'mission attempt set' },
@@ -134,13 +142,14 @@ describe('Mission CRD Lifecycle', () => {
     const mission = await getCustomResource('missions', 'e2e-test-mission');
     const status = (mission as Record<string, unknown>).status as { attempt: number };
     expect(status.attempt).toBeGreaterThanOrEqual(1);
+    console.log(`[test] PASSED: attempt=${status.attempt}`);
   });
 
   it('cleans up Mission CRD on delete', async () => {
+    console.log('[test] === Mission cleanup on delete ===');
     await applyCell(MISSION_CELL);
     await applyMission(TEST_MISSION);
 
-    // Wait for mission to exist
     await waitFor(
       async () => {
         const mission = await getCustomResource('missions', 'e2e-test-mission');
@@ -149,19 +158,21 @@ describe('Mission CRD Lifecycle', () => {
       { timeoutMs: 30_000, label: 'mission exists' },
     );
 
-    // Delete mission
+    console.log('[test] Deleting Mission...');
     await deleteMission('e2e-test-mission');
 
-    // Verify mission is gone
     await waitFor(
       async () => {
         const mission = await getCustomResource('missions', 'e2e-test-mission');
-        return mission === null;
+        const exists = mission !== null;
+        console.log(`[test] Mission still exists: ${exists}`);
+        return !exists;
       },
       { timeoutMs: 30_000, label: 'mission deleted' },
     );
 
     const mission = await getCustomResource('missions', 'e2e-test-mission');
     expect(mission).toBeNull();
+    console.log('[test] PASSED: Mission deleted');
   });
 });

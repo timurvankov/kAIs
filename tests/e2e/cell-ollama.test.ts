@@ -34,6 +34,7 @@ const OLLAMA_CELL = {
 
 describe('Cell with Ollama (real LLM)', () => {
   afterEach(async () => {
+    console.log('[ollama] Cleaning up...');
     await deleteCell('e2e-ollama-cell');
     await waitFor(
       async () => {
@@ -45,26 +46,33 @@ describe('Cell with Ollama (real LLM)', () => {
   });
 
   it('produces an LLM response when sent a message via NATS', async () => {
-    // Apply the Cell
+    console.log('[test] === Ollama LLM response test ===');
     await applyCell(OLLAMA_CELL);
 
-    // Wait for Cell to be Running
+    console.log('[test] Waiting for Cell pod to be ready...');
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/cell=e2e-ollama-cell');
         if (pods.length === 0) return false;
         const pod = pods[0]!;
+        const phase = pod.status?.phase ?? '?';
         const containerStatuses = pod.status?.containerStatuses ?? [];
-        return containerStatuses.some((cs) => cs.ready);
+        const ready = containerStatuses.some((cs) => cs.ready);
+        console.log(`[test] Pod phase=${phase}, ready=${ready}, containers=${containerStatuses.length}`);
+        if (!ready && containerStatuses.length > 0) {
+          const cs = containerStatuses[0]!;
+          const waiting = cs.state?.waiting;
+          if (waiting) console.log(`[test]   Container waiting: ${waiting.reason} — ${waiting.message ?? ''}`);
+        }
+        return ready;
       },
       { timeoutMs: 90_000, label: 'ollama cell pod ready' },
     );
 
-    // Connect to NATS and subscribe to outbox BEFORE sending message
+    console.log('[test] Pod ready. Connecting to NATS...');
     const nc = await connect({ servers: NATS_URL });
     const outboxSub = nc.subscribe('cell.default.e2e-ollama-cell.outbox', { max: 1 });
 
-    // Send a message to the cell's inbox
     const envelope = {
       id: crypto.randomUUID(),
       from: 'e2e-test',
@@ -73,24 +81,28 @@ describe('Cell with Ollama (real LLM)', () => {
       payload: { content: 'What is 2 + 2? Reply with just the number.' },
       timestamp: new Date().toISOString(),
     };
+    console.log('[test] Sending message to cell inbox...');
     nc.publish(
       'cell.default.e2e-ollama-cell.inbox',
       new TextEncoder().encode(JSON.stringify(envelope)),
     );
 
-    // Wait for a response on the outbox
+    console.log('[test] Waiting for response on outbox...');
     let responseData: string | null = null;
-    const timeout = setTimeout(() => outboxSub.unsubscribe(), 60_000);
+    const timeout = setTimeout(() => {
+      console.log('[test] Outbox subscription timed out (60s)');
+      outboxSub.unsubscribe();
+    }, 60_000);
 
     for await (const msg of outboxSub) {
       responseData = new TextDecoder().decode(msg.data);
+      console.log(`[test] Got response: ${responseData.slice(0, 200)}...`);
       break;
     }
     clearTimeout(timeout);
 
     await nc.drain();
 
-    // Verify we got a response
     expect(responseData).not.toBeNull();
     const response = JSON.parse(responseData!) as {
       type: string;
@@ -98,8 +110,8 @@ describe('Cell with Ollama (real LLM)', () => {
     };
     expect(response.type).toBeDefined();
     expect(response.payload).toBeDefined();
-    // The LLM should have produced some content
     expect(response.payload.content).toBeDefined();
     expect(response.payload.content!.length).toBeGreaterThan(0);
+    console.log(`[test] PASSED: LLM responded with: "${response.payload.content!.slice(0, 50)}"`);
   });
 });

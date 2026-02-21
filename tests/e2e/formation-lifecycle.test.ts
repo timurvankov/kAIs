@@ -1,7 +1,7 @@
 /**
  * E2E: Formation CRD lifecycle — create, verify child Cells, scale, delete cascade.
  */
-import { describe, it, afterEach, expect } from 'vitest';
+import { describe, it, afterEach, expect, beforeAll } from 'vitest';
 import {
   applyFormation,
   deleteFormation,
@@ -10,6 +10,7 @@ import {
   waitFor,
   getCustomResource,
   customApi,
+  dumpClusterState,
 } from './helpers.js';
 
 const TEST_FORMATION = {
@@ -62,9 +63,14 @@ async function listCells(labelSelector: string): Promise<unknown[]> {
 }
 
 describe('Formation CRD Lifecycle', () => {
+  beforeAll(async () => {
+    console.log('[formation-lifecycle] Starting test suite');
+    await dumpClusterState('before formation-lifecycle tests');
+  });
+
   afterEach(async () => {
+    console.log('[formation-lifecycle] Cleaning up...');
     await deleteFormation('e2e-test-formation');
-    // Clean up any leftover cells
     await waitFor(
       async () => {
         const cells = await listCells('kais.io/formation=e2e-test-formation');
@@ -72,17 +78,23 @@ describe('Formation CRD Lifecycle', () => {
       },
       { timeoutMs: 30_000, label: 'cell cleanup' },
     ).catch(() => {
-      // Best effort cleanup
+      console.log('[cleanup] Cell cleanup timed out (best effort)');
     });
   });
 
   it('creates child Cell CRDs when Formation is applied', async () => {
+    console.log('[test] === creates child Cell CRDs ===');
     await applyFormation(TEST_FORMATION);
 
-    // Wait for child Cells to be created
     await waitFor(
       async () => {
         const cells = await listCells('kais.io/formation=e2e-test-formation');
+        if (cells.length > 0) {
+          const names = cells.map(
+            (c) => ((c as Record<string, unknown>).metadata as { name: string }).name,
+          );
+          console.log(`[test] Cells found: [${names.join(', ')}] (need 2)`);
+        }
         return cells.length === 2;
       },
       { timeoutMs: 60_000, label: 'child cell creation' },
@@ -96,15 +108,20 @@ describe('Formation CRD Lifecycle', () => {
     );
     expect(cellNames).toContain('worker-0');
     expect(cellNames).toContain('worker-1');
+    console.log('[test] PASSED: child Cell CRDs created');
   });
 
   it('creates Pods for each child Cell', async () => {
+    console.log('[test] === creates Pods for each child Cell ===');
     await applyFormation(TEST_FORMATION);
 
-    // Wait for Pods to appear
     await waitFor(
       async () => {
         const pods = await listPods('kais.io/formation=e2e-test-formation');
+        for (const pod of pods) {
+          const phase = pod.status?.phase ?? '?';
+          console.log(`[test] Pod ${pod.metadata?.name}: phase=${phase}`);
+        }
         return pods.length === 2;
       },
       { timeoutMs: 90_000, label: 'pod creation for formation cells' },
@@ -112,16 +129,22 @@ describe('Formation CRD Lifecycle', () => {
 
     const pods = await listPods('kais.io/formation=e2e-test-formation');
     expect(pods).toHaveLength(2);
+    console.log('[test] PASSED: Pods created for formation cells');
   });
 
   it('updates Formation status with cell counts', async () => {
+    console.log('[test] === updates Formation status ===');
     await applyFormation(TEST_FORMATION);
 
     await waitFor(
       async () => {
         const formation = await getCustomResource('formations', 'e2e-test-formation');
-        if (!formation) return false;
-        const status = formation.status as { totalCells?: number } | undefined;
+        if (!formation) {
+          console.log('[test] Formation resource not found');
+          return false;
+        }
+        const status = formation.status as { phase?: string; totalCells?: number } | undefined;
+        console.log(`[test] Formation status: phase=${status?.phase ?? 'none'}, totalCells=${status?.totalCells ?? 0}`);
         return (status?.totalCells ?? 0) === 2;
       },
       { timeoutMs: 90_000, label: 'formation status update' },
@@ -133,27 +156,29 @@ describe('Formation CRD Lifecycle', () => {
       totalCells: number;
     };
     expect(status.totalCells).toBe(2);
+    console.log('[test] PASSED: Formation status updated');
   });
 
   it('cascade-deletes child Cells when Formation is deleted', async () => {
+    console.log('[test] === cascade-deletes child Cells ===');
     await applyFormation(TEST_FORMATION);
 
-    // Wait for cells to exist
     await waitFor(
       async () => {
         const cells = await listCells('kais.io/formation=e2e-test-formation');
+        console.log(`[test] Cells: ${cells.length} (waiting for 2)`);
         return cells.length === 2;
       },
       { timeoutMs: 60_000, label: 'cell creation for delete test' },
     );
 
-    // Delete formation
+    console.log('[test] Deleting Formation to test cascade...');
     await deleteFormation('e2e-test-formation');
 
-    // Verify cells are garbage collected
     await waitFor(
       async () => {
         const cells = await listCells('kais.io/formation=e2e-test-formation');
+        console.log(`[test] Remaining cells after delete: ${cells.length}`);
         return cells.length === 0;
       },
       { timeoutMs: 30_000, label: 'cascade deletion' },
@@ -161,5 +186,6 @@ describe('Formation CRD Lifecycle', () => {
 
     const cells = await listCells('kais.io/formation=e2e-test-formation');
     expect(cells).toHaveLength(0);
+    console.log('[test] PASSED: cascade deletion verified');
   });
 });

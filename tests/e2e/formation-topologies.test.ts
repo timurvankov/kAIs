@@ -31,9 +31,9 @@ const CELL_SPEC = {
 
 describe('Formation Topologies', () => {
   afterEach(async () => {
+    console.log('[topologies] Cleaning up...');
     await deleteFormation('e2e-star-formation');
     await deleteFormation('e2e-ring-formation');
-    // Wait for cleanup
     await waitFor(
       async () => {
         const cells1 = await listCustomResources('cells', 'kais.io/formation=e2e-star-formation');
@@ -45,6 +45,7 @@ describe('Formation Topologies', () => {
   });
 
   it('star topology creates hub and spoke cells', async () => {
+    console.log('[test] === star topology ===');
     const formation = {
       apiVersion: 'kais.io/v1',
       kind: 'Formation',
@@ -60,10 +61,13 @@ describe('Formation Topologies', () => {
 
     await applyFormation(formation);
 
-    // Wait for child cells to be created (1 hub + 3 spokes = 4)
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-star-formation');
+        const names = cells.map(
+          (c) => ((c as Record<string, unknown>).metadata as { name: string }).name,
+        );
+        console.log(`[test] Star cells: [${names.join(', ')}] (need 4)`);
         return cells.length === 4;
       },
       { timeoutMs: 60_000, label: 'star topology cells created' },
@@ -79,9 +83,11 @@ describe('Formation Topologies', () => {
     expect(cellNames).toContain('spoke-0');
     expect(cellNames).toContain('spoke-1');
     expect(cellNames).toContain('spoke-2');
+    console.log('[test] PASSED: star topology');
   });
 
   it('ring topology creates cells in ring formation', async () => {
+    console.log('[test] === ring topology ===');
     const formation = {
       apiVersion: 'kais.io/v1',
       kind: 'Formation',
@@ -96,10 +102,13 @@ describe('Formation Topologies', () => {
 
     await applyFormation(formation);
 
-    // Wait for child cells to be created (4 nodes)
     await waitFor(
       async () => {
         const cells = await listCustomResources('cells', 'kais.io/formation=e2e-ring-formation');
+        const names = cells.map(
+          (c) => ((c as Record<string, unknown>).metadata as { name: string }).name,
+        );
+        console.log(`[test] Ring cells: [${names.join(', ')}] (need 4)`);
         return cells.length === 4;
       },
       { timeoutMs: 60_000, label: 'ring topology cells created' },
@@ -116,9 +125,9 @@ describe('Formation Topologies', () => {
     expect(cellNames).toContain('node-2');
     expect(cellNames).toContain('node-3');
 
-    // Verify formation status
     const fm = await getCustomResource('formations', 'e2e-ring-formation');
     const status = (fm as Record<string, unknown>).status as { totalCells?: number };
     expect(status.totalCells).toBe(4);
+    console.log('[test] PASSED: ring topology');
   });
 });
