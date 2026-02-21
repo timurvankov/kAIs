@@ -70,6 +70,83 @@ describe('InMemoryKnowledgeStore', () => {
     expect(allFacts).toHaveLength(1);
   });
 
+  it('ancestor cell sees parent cell facts via ancestorCellIds', async () => {
+    const store = new InMemoryKnowledgeStore();
+
+    await store.addFact({
+      content: 'Parent decision: use PostgreSQL',
+      scope: { level: 'cell', realmId: 'default', cellId: 'parent-0' },
+      source: { type: 'explicit_remember' },
+      confidence: 0.9,
+      tags: ['decision'],
+    });
+
+    await store.addFact({
+      content: 'Sibling secret: internal notes',
+      scope: { level: 'cell', realmId: 'default', cellId: 'sibling-0' },
+      source: { type: 'explicit_remember' },
+      confidence: 0.8,
+      tags: ['notes'],
+    });
+
+    // Child cell searches WITH ancestor chain — should see parent's fact
+    const childFacts = await store.search(
+      'decision notes',
+      { level: 'cell', realmId: 'default', cellId: 'child-0' },
+      {},
+      ['parent-0'],
+    );
+    const contents = childFacts.map((f) => f.content);
+    expect(contents).toContain('Parent decision: use PostgreSQL');
+    expect(contents).not.toContain('Sibling secret: internal notes');
+  });
+
+  it('grandchild sees grandparent facts through ancestor chain', async () => {
+    const store = new InMemoryKnowledgeStore();
+
+    await store.addFact({
+      content: 'Root architecture choice',
+      scope: { level: 'cell', realmId: 'default', cellId: 'root-0' },
+      source: { type: 'explicit_remember' },
+      confidence: 0.95,
+      tags: ['arch'],
+    });
+
+    await store.addFact({
+      content: 'Middle layer decision',
+      scope: { level: 'cell', realmId: 'default', cellId: 'middle-0' },
+      source: { type: 'explicit_remember' },
+      confidence: 0.85,
+      tags: ['arch'],
+    });
+
+    const facts = await store.search(
+      'architecture decision',
+      { level: 'cell', realmId: 'default', cellId: 'grandchild-0' },
+      {},
+      ['root-0', 'middle-0'],
+    );
+    expect(facts).toHaveLength(2);
+  });
+
+  it('cell without ancestors cannot see other cell facts', async () => {
+    const store = new InMemoryKnowledgeStore();
+
+    await store.addFact({
+      content: 'Private cell fact',
+      scope: { level: 'cell', realmId: 'default', cellId: 'other-cell' },
+      source: { type: 'explicit_remember' },
+      confidence: 0.9,
+      tags: ['private'],
+    });
+
+    const facts = await store.search(
+      'private',
+      { level: 'cell', realmId: 'default', cellId: 'my-cell' },
+    );
+    expect(facts).toHaveLength(0);
+  });
+
   it('creates a scoped view', async () => {
     const store = new InMemoryKnowledgeStore();
     await store.addFact({

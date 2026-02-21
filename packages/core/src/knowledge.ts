@@ -19,9 +19,10 @@ export interface KnowledgeStore {
     query: string,
     scope: KnowledgeScope,
     options?: Partial<SearchOptions>,
+    ancestorCellIds?: string[],
   ): Promise<Fact[]>;
   getRelated(factId: string): Promise<Fact[]>;
-  scopedView(scope: KnowledgeScope): ScopedKnowledgeStore;
+  scopedView(scope: KnowledgeScope, ancestorCellIds?: string[]): ScopedKnowledgeStore;
 }
 
 /** A scope-restricted view of a KnowledgeStore. */
@@ -34,8 +35,16 @@ export interface ScopedKnowledgeStore {
 /** Scope hierarchy levels from broadest to narrowest. */
 const SCOPE_LEVELS: KnowledgeScope['level'][] = ['platform', 'realm', 'formation', 'cell'];
 
-/** Check if a fact's scope is visible from the given query scope. */
-function isVisible(factScope: KnowledgeScope, queryScope: KnowledgeScope): boolean {
+/**
+ * Check if a fact's scope is visible from the given query scope.
+ * When ancestorCellIds is provided, facts belonging to any ancestor cell
+ * are also visible (tree-based knowledge inheritance).
+ */
+function isVisible(
+  factScope: KnowledgeScope,
+  queryScope: KnowledgeScope,
+  ancestorCellIds?: string[],
+): boolean {
   const factLevel = SCOPE_LEVELS.indexOf(factScope.level);
   const queryLevel = SCOPE_LEVELS.indexOf(queryScope.level);
 
@@ -54,12 +63,21 @@ function isVisible(factScope: KnowledgeScope, queryScope: KnowledgeScope): boole
         factScope.realmId === queryScope.realmId &&
         factScope.formationId === queryScope.formationId
       );
-    case 'cell':
-      return (
+    case 'cell': {
+      // Direct match
+      if (
         factScope.realmId === queryScope.realmId &&
         factScope.formationId === queryScope.formationId &&
         factScope.cellId === queryScope.cellId
-      );
+      ) {
+        return true;
+      }
+      // Ancestor chain visibility: a cell can see facts from its parent cells
+      if (ancestorCellIds && factScope.cellId) {
+        return ancestorCellIds.includes(factScope.cellId);
+      }
+      return false;
+    }
     default:
       return false;
   }
@@ -108,6 +126,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     query: string,
     scope: KnowledgeScope,
     options?: Partial<SearchOptions>,
+    ancestorCellIds?: string[],
   ): Promise<Fact[]> {
     const maxResults = options?.maxResults ?? 20;
     const minConfidence = options?.minConfidence ?? 0;
@@ -117,7 +136,7 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     for (const fact of this.facts.values()) {
       if (!includeInvalidated && fact.validUntil) continue;
       if (fact.confidence < minConfidence) continue;
-      if (!isVisible(fact.scope, scope)) continue;
+      if (!isVisible(fact.scope, scope, ancestorCellIds)) continue;
       if (!matches(fact, query)) continue;
       results.push(fact);
     }
@@ -131,11 +150,11 @@ export class InMemoryKnowledgeStore implements KnowledgeStore {
     return []; // Not implemented for in-memory store
   }
 
-  scopedView(scope: KnowledgeScope): ScopedKnowledgeStore {
+  scopedView(scope: KnowledgeScope, ancestorCellIds?: string[]): ScopedKnowledgeStore {
     const self = this;
     return {
       async search(query: string, options?: Partial<SearchOptions>) {
-        return self.search(query, scope, options);
+        return self.search(query, scope, options, ancestorCellIds);
       },
       async addFact(input: Omit<AddFactInput, 'scope'>) {
         return self.addFact({ ...input, scope });
