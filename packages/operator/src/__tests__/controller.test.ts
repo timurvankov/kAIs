@@ -311,7 +311,7 @@ describe('CellController.reconcileCell', () => {
   it('preserves existing cost/token counters during status sync', async () => {
     const cell = makeCell({
       status: {
-        phase: 'Running',
+        phase: 'Pending',
         totalCost: 1.5,
         totalTokens: 5000,
       },

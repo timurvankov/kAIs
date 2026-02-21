@@ -4,6 +4,12 @@ import { buildCellPod } from './pod-builder.js';
 import { specChanged } from './spec-changed.js';
 import type { CellResource, KubeClient } from './types.js';
 
+/** Extract HTTP status code from @kubernetes/client-node errors. */
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
+  return e.code ?? e.statusCode ?? e.response?.statusCode;
+}
+
 const RECONCILE_RETRY_DELAY_MS = 5_000;
 const MAX_RECONCILE_RETRIES = 3;
 
@@ -251,7 +257,16 @@ export class CellController {
     if (!pod) {
       // No Pod exists — create one
       const newPod = buildCellPod(cell);
-      await this.client.createPod(newPod);
+      try {
+        await this.client.createPod(newPod);
+      } catch (err: unknown) {
+        if (httpStatus(err) === 409) {
+          // Pod already exists (race condition) — proceed to sync status
+          console.log(`[CellController] pod ${podName} already exists, skipping create`);
+        } else {
+          throw err;
+        }
+      }
       await this.client.updateCellStatus(
         cell.metadata.name,
         cell.metadata.namespace,
@@ -308,6 +323,7 @@ export class CellController {
 
   /**
    * Sync the Cell's status from the running Pod.
+   * Only updates if the phase actually changed to avoid infinite reconciliation loops.
    */
   private async syncCellStatus(
     cell: CellResource,
@@ -319,6 +335,11 @@ export class CellController {
         : pod.status?.phase === 'Succeeded'
           ? ('Completed' as const)
           : ('Pending' as const);
+
+    // Skip update if phase hasn't changed — avoids status update → cell update event → reconcile loop
+    if (cell.status?.phase === phase) {
+      return;
+    }
 
     await this.client.updateCellStatus(
       cell.metadata.name,
