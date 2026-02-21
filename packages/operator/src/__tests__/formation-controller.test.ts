@@ -857,7 +857,7 @@ describe('FormationController.reconcileFormation', () => {
     expect(client.formationStatusUpdates[0]!.status.phase).toBe('Completed');
   });
 
-  it('sets phase to Failed when any cell is Failed', async () => {
+  it('sets phase to Running when all cells are Running', async () => {
     const formation = makeFormation({}, {
       cells: [
         {

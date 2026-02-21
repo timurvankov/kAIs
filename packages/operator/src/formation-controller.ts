@@ -3,6 +3,7 @@ import * as k8sLib from '@kubernetes/client-node';
 import type { CellSpec, FormationStatus } from '@kais/core';
 
 import { generateTopologyConfigMap } from './topology.js';
+import { deepEqual } from './spec-changed.js';
 import { buildWorkspacePVC } from './workspace.js';
 import type { CellResource, FormationResource, KubeClient } from './types.js';
 
@@ -138,6 +139,27 @@ export class FormationController {
     console.error(
       `[FormationController] exhausted retries for ${formationId}, will retry on next event`,
     );
+
+    // Update formation status to Failed after all retries exhausted
+    try {
+      await this.client.updateFormationStatus(
+        formation.metadata.name,
+        formation.metadata.namespace,
+        {
+          phase: 'Failed',
+          readyCells: 0,
+          totalCells: 0,
+          totalCost: 0,
+          cells: [],
+          message: `Reconciliation failed after ${MAX_RECONCILE_RETRIES + 1} attempts`,
+        },
+      );
+    } catch (statusErr) {
+      console.error(
+        `[FormationController] failed to update status for ${formationId}:`,
+        statusErr,
+      );
+    }
   }
 
   /**
@@ -196,13 +218,14 @@ export class FormationController {
       }
     }
 
-    // 5. Scale down: delete cells that shouldn't exist
-    const existingCells = await this.client.listCells(
+    // 5. Fetch all cells once for scale-down, budget enforcement, and status aggregation
+    const allCells = await this.client.listCells(
       namespace,
       `kais.io/formation=${formation.metadata.name}`,
     );
 
-    for (const cell of existingCells) {
+    // 6. Scale down: delete cells that shouldn't exist
+    for (const cell of allCells) {
       if (!desiredCells.has(cell.metadata.name)) {
         await this.client.deleteCell(cell.metadata.name, namespace);
         await this.client.emitFormationEvent(
@@ -214,14 +237,12 @@ export class FormationController {
       }
     }
 
-    // 6. Budget enforcement
-    const allCells = await this.client.listCells(
-      namespace,
-      `kais.io/formation=${formation.metadata.name}`,
-    );
+    // Filter to only cells that survived scale-down
+    const liveCells = allCells.filter((c) => desiredCells.has(c.metadata.name));
 
+    // 7. Budget enforcement
     let totalCost = 0;
-    for (const cell of allCells) {
+    for (const cell of liveCells) {
       totalCost += cell.status?.totalCost ?? 0;
     }
 
@@ -230,7 +251,7 @@ export class FormationController {
 
     if (maxTotalCost !== undefined && totalCost >= maxTotalCost) {
       // Pause all cells
-      for (const cell of allCells) {
+      for (const cell of liveCells) {
         if (cell.status?.phase !== 'Paused') {
           await this.client.updateCellStatus(cell.metadata.name, namespace, {
             phase: 'Paused',
@@ -247,17 +268,9 @@ export class FormationController {
       );
     }
 
-    // 7. Aggregate status
-    // Re-fetch cells to get latest status after any budget pausing
-    const finalCells = phase === 'Paused'
-      ? allCells
-      : await this.client.listCells(
-          namespace,
-          `kais.io/formation=${formation.metadata.name}`,
-        );
-
-    const readyCells = finalCells.filter((c) => c.status?.phase === 'Running').length;
-    const cellStatuses = finalCells.map((c) => ({
+    // 8. Aggregate status from liveCells (already reflects budget pausing above)
+    const readyCells = liveCells.filter((c) => c.status?.phase === 'Running').length;
+    const cellStatuses = liveCells.map((c) => ({
       name: c.metadata.name,
       phase: c.status?.phase ?? 'Pending',
       cost: c.status?.totalCost ?? 0,
@@ -265,9 +278,9 @@ export class FormationController {
 
     // If not paused, determine phase from cell states
     if (phase !== 'Paused') {
-      const allCompleted = finalCells.length > 0 &&
-        finalCells.every((c) => c.status?.phase === 'Completed');
-      const anyFailed = finalCells.some((c) => c.status?.phase === 'Failed');
+      const allCompleted = liveCells.length > 0 &&
+        liveCells.every((c) => c.status?.phase === 'Completed');
+      const anyFailed = liveCells.some((c) => c.status?.phase === 'Failed');
 
       if (allCompleted) {
         phase = 'Completed';
@@ -373,10 +386,11 @@ export class FormationController {
    * Check whether a Cell's spec has changed from the desired spec.
    */
   private cellSpecChanged(cell: CellResource, desiredSpec: CellSpec): boolean {
-    // Compare the key fields that matter
-    return JSON.stringify(cell.spec) !== JSON.stringify({
+    // Compare using key-order independent deep equality
+    const expected = {
       ...desiredSpec,
       formationRef: cell.spec.formationRef,
-    });
+    };
+    return !deepEqual(cell.spec, expected);
   }
 }
