@@ -6,6 +6,8 @@ import type { AuthUser, RbacResource, RbacRule, RbacVerb, Role } from '@kais/cor
  */
 export interface RbacStore {
   getRolesByNames(names: string[]): Promise<Role[]>;
+  getAllRoles(): Promise<Role[]>;
+  getRole(name: string): Promise<Role | undefined>;
 }
 
 /**
@@ -26,6 +28,14 @@ export class InMemoryRbacStore implements RbacStore {
       if (role) result.push(role);
     }
     return result;
+  }
+
+  async getAllRoles(): Promise<Role[]> {
+    return [...this.roles.values()];
+  }
+
+  async getRole(name: string): Promise<Role | undefined> {
+    return this.roles.get(name);
   }
 }
 
@@ -97,6 +107,16 @@ export class RbacService {
       allowed: false,
       reason: `User ${user.name} cannot ${verb} ${resource}${namespace ? ` in ${namespace}` : ''}`,
     };
+  }
+
+  /** List all available roles. */
+  async listRoles(): Promise<Role[]> {
+    return this.store.getAllRoles();
+  }
+
+  /** Get a single role by name. */
+  async getRole(name: string): Promise<Role | undefined> {
+    return this.store.getRole(name);
   }
 
   /**

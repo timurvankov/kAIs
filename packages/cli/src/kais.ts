@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { execSync, execFileSync } from 'node:child_process';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { renderTopology, type TopologySpec } from './topology-renderer.js';
@@ -32,6 +32,34 @@ spec:
 
 function getApiUrl(opts: { apiUrl?: string }): string {
   return opts.apiUrl ?? process.env['KAIS_API_URL'] ?? 'http://localhost:3000';
+}
+
+/** Build auth headers from --token flag or saved config. */
+function authHeaders(opts: { token?: string }): Record<string, string> {
+  let token = opts.token ?? process.env['KAIS_TOKEN'];
+  if (!token) {
+    try {
+      const configPath = resolve(process.env['HOME'] ?? '~', '.kais', 'config.json');
+      if (existsSync(configPath)) {
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        token = config.token;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (token) return { 'Authorization': `Bearer ${token}` };
+  return {};
+}
+
+/** Render a simple budget bar: [███░░░░░░░] */
+function budgetBar(spent: number, delegated: number, allocated: number): string {
+  if (allocated <= 0) return '';
+  const width = 20;
+  const spentChars = Math.round((spent / allocated) * width);
+  const delegatedChars = Math.round((delegated / allocated) * width);
+  const freeChars = Math.max(0, width - spentChars - delegatedChars);
+  return `[${'█'.repeat(spentChars)}${'▓'.repeat(delegatedChars)}${'░'.repeat(freeChars)}]`;
 }
 
 export function createProgram(): Command {
@@ -484,6 +512,527 @@ export function createProgram(): Command {
         execSync(`${openCmd} '${grafanaUrl}'`, { stdio: 'ignore' });
       } catch {
         console.log(`Open this URL in your browser: ${grafanaUrl}`);
+      }
+    });
+
+  // ----- Phase 8: Tree commands -----
+
+  const tree = program.command('tree').description('Cell tree visualization');
+
+  tree
+    .command('show <cellId>')
+    .description('Show recursive cell tree from a given cell')
+    .option('--depth <n>', 'Maximum display depth', '10')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (cellId: string, opts: { depth: string; apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/tree/${encodeURIComponent(cellId)}`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        root: string;
+        nodes: Array<{ cellId: string; parentId: string | null; depth: number; path: string; descendantCount: number; namespace: string }>;
+      };
+
+      const maxDepth = parseInt(opts.depth, 10) || 10;
+
+      // Build tree from flat node list
+      const byId = new Map(data.nodes.map(n => [n.cellId, n]));
+      const children = new Map<string | null, string[]>();
+      for (const n of data.nodes) {
+        const list = children.get(n.parentId) ?? [];
+        list.push(n.cellId);
+        children.set(n.parentId, list);
+      }
+
+      function printNode(id: string, prefix: string, isLast: boolean, depth: number): void {
+        if (depth > maxDepth) return;
+        const node = byId.get(id);
+        if (!node) return;
+        const connector = depth === 0 ? '' : isLast ? '└── ' : '├── ';
+        const desc = node.descendantCount > 0 ? ` (${node.descendantCount} descendants)` : '';
+        console.log(`${prefix}${connector}${node.cellId} [${node.namespace}]${desc}`);
+        const kids = children.get(id) ?? [];
+        const nextPrefix = depth === 0 ? '' : prefix + (isLast ? '    ' : '│   ');
+        kids.forEach((kid, i) => printNode(kid, nextPrefix, i === kids.length - 1, depth + 1));
+      }
+
+      printNode(data.root, '', true, 0);
+    });
+
+  tree
+    .command('ancestors <cellId>')
+    .description('Show ancestor chain from cell to root')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (cellId: string, opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/tree/${encodeURIComponent(cellId)}/ancestors`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        ancestors: Array<{ cellId: string; depth: number; namespace: string }>;
+      };
+      for (const a of data.ancestors) {
+        const indent = '  '.repeat(a.depth);
+        console.log(`${indent}${a.cellId} [${a.namespace}] depth=${a.depth}`);
+      }
+    });
+
+  // ----- Phase 8: Budget commands -----
+
+  const budget = program.command('budget').description('Budget management commands');
+
+  budget
+    .command('show <cellId>')
+    .description('Show budget balance for a cell')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (cellId: string, opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/budgets/${encodeURIComponent(cellId)}`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const b = (await res.json()) as {
+        cellId: string; allocated: number; spent: number; delegated: number; available: number;
+      };
+      console.log(`Cell:      ${b.cellId}`);
+      console.log(`Allocated: $${b.allocated.toFixed(2)}`);
+      console.log(`Spent:     $${b.spent.toFixed(2)}`);
+      console.log(`Delegated: $${b.delegated.toFixed(2)}`);
+      console.log(`Available: $${b.available.toFixed(2)}`);
+    });
+
+  budget
+    .command('tree <cellId>')
+    .description('Show budget tree from a root cell')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (cellId: string, opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/budgets/${encodeURIComponent(cellId)}/tree`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      interface TreeNode { cellId: string; balance: { allocated: number; spent: number; delegated: number; available: number }; children: TreeNode[] }
+      const data = (await res.json()) as { tree: TreeNode[] };
+
+      function printBudgetNode(node: TreeNode, prefix: string, isLast: boolean): void {
+        const connector = prefix === '' ? '' : isLast ? '└── ' : '├── ';
+        const b = node.balance;
+        const bar = budgetBar(b.spent, b.delegated, b.allocated);
+        console.log(`${prefix}${connector}${node.cellId}  $${b.spent.toFixed(2)}/$${b.allocated.toFixed(2)} ${bar}`);
+        const nextPrefix = prefix === '' ? '' : prefix + (isLast ? '    ' : '│   ');
+        node.children.forEach((child, i) => printBudgetNode(child, nextPrefix, i === node.children.length - 1));
+      }
+
+      for (const root of data.tree) {
+        printBudgetNode(root, '', true);
+      }
+    });
+
+  budget
+    .command('history <cellId>')
+    .description('Show budget ledger history for a cell')
+    .option('--limit <n>', 'Maximum entries', '20')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (cellId: string, opts: { limit: string; apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const limit = parseInt(opts.limit, 10) || 20;
+      const res = await fetch(
+        `${apiUrl}/api/v1/budgets/${encodeURIComponent(cellId)}/history?limit=${limit}`,
+        { headers },
+      );
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        history: Array<{
+          id: number; cellId: string; operation: string; amount: number;
+          fromCellId?: string; toCellId?: string; balanceAfter: number;
+          reason?: string; createdAt: string;
+        }>;
+      };
+
+      if (data.history.length === 0) {
+        console.log('No ledger entries found.');
+        return;
+      }
+
+      console.log('ID     OP          AMOUNT   BALANCE  FROM/TO              REASON              TIME');
+      console.log('─'.repeat(100));
+      for (const e of data.history) {
+        const time = new Date(e.createdAt).toLocaleString();
+        const peer = e.fromCellId ?? e.toCellId ?? '-';
+        console.log(
+          `${String(e.id).padEnd(7)}${e.operation.padEnd(12)}$${e.amount.toFixed(2).padStart(7)}  $${e.balanceAfter.toFixed(2).padStart(7)}  ${peer.padEnd(21)}${(e.reason ?? '').padEnd(20)}${time}`,
+        );
+      }
+    });
+
+  budget
+    .command('top-up <parentCellId> <childCellId> <amount>')
+    .description('Top up a child cell budget from parent')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (parentCellId: string, childCellId: string, amountStr: string, opts: { apiUrl?: string; token?: string }) => {
+      const amount = parseFloat(amountStr);
+      if (isNaN(amount) || amount <= 0) {
+        console.error('Error: amount must be a positive number');
+        process.exitCode = 1;
+        return;
+      }
+      const apiUrl = getApiUrl(opts);
+      const headers = { ...authHeaders(opts), 'Content-Type': 'application/json' };
+      const res = await fetch(`${apiUrl}/api/v1/budgets/${encodeURIComponent(parentCellId)}/top-up`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ childCellId, amount }),
+      });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`Topped up ${childCellId} with $${amount.toFixed(2)} from ${parentCellId}`);
+    });
+
+  // ----- Phase 8: Spawn request commands -----
+
+  const spawn = program.command('spawn-requests').description('Spawn request management');
+
+  spawn
+    .command('list')
+    .description('List spawn requests')
+    .option('--status <status>', 'Filter by status (Pending, Approved, Rejected)')
+    .option('-n, --namespace <ns>', 'Filter by namespace')
+    .option('--limit <n>', 'Maximum entries', '100')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (opts: { status?: string; namespace?: string; limit: string; apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const params = new URLSearchParams();
+      if (opts.status) params.set('status', opts.status);
+      if (opts.namespace) params.set('namespace', opts.namespace);
+      params.set('limit', opts.limit);
+
+      const res = await fetch(`${apiUrl}/api/v1/spawn-requests?${params.toString()}`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        requests: Array<{
+          id: number; name: string; namespace: string; requestorCellId: string;
+          status: string; reason?: string; createdAt: string;
+        }>;
+      };
+
+      if (data.requests.length === 0) {
+        console.log('No spawn requests found.');
+        return;
+      }
+
+      console.log('ID     NAME                 NAMESPACE   REQUESTOR            STATUS     CREATED');
+      console.log('─'.repeat(95));
+      for (const r of data.requests) {
+        const time = new Date(r.createdAt).toLocaleString();
+        console.log(
+          `${String(r.id).padEnd(7)}${r.name.padEnd(21)}${r.namespace.padEnd(12)}${r.requestorCellId.padEnd(21)}${r.status.padEnd(11)}${time}`,
+        );
+      }
+    });
+
+  spawn
+    .command('approve <id>')
+    .description('Approve a spawn request')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (id: string, opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = { ...authHeaders(opts), 'Content-Type': 'application/json' };
+      const res = await fetch(`${apiUrl}/api/v1/spawn-requests/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        headers,
+      });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as { id: number; status: string };
+      console.log(`SpawnRequest #${data.id} approved`);
+    });
+
+  spawn
+    .command('reject <id>')
+    .description('Reject a spawn request')
+    .option('--reason <reason>', 'Rejection reason')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (id: string, opts: { reason?: string; apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = { ...authHeaders(opts), 'Content-Type': 'application/json' };
+      const res = await fetch(`${apiUrl}/api/v1/spawn-requests/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: opts.reason }),
+      });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as { id: number; status: string };
+      console.log(`SpawnRequest #${data.id} rejected`);
+    });
+
+  // ----- Phase 8: Auth commands -----
+
+  const auth = program.command('auth').description('Authentication commands');
+
+  auth
+    .command('login')
+    .description('Save an API token for authentication')
+    .option('--token <token>', 'Bearer token')
+    .option('--api-url <url>', 'API server URL to store')
+    .action((opts: { token?: string; apiUrl?: string }) => {
+      if (!opts.token) {
+        console.error('Error: --token is required');
+        process.exitCode = 1;
+        return;
+      }
+      const configDir = resolve(process.env['HOME'] ?? '~', '.kais');
+      if (!existsSync(configDir)) {
+        mkdirSync(configDir, { recursive: true });
+      }
+      const config: Record<string, string> = {};
+      config.token = opts.token;
+      if (opts.apiUrl) config.apiUrl = opts.apiUrl;
+      writeFileSync(resolve(configDir, 'config.json'), JSON.stringify(config, null, 2), 'utf-8');
+      console.log(`Token saved to ${configDir}/config.json`);
+    });
+
+  auth
+    .command('whoami')
+    .description('Show current authenticated user')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      if (!headers['Authorization']) {
+        console.error('Error: no auth token configured. Run: kais auth login --token <token>');
+        process.exitCode = 1;
+        return;
+      }
+      const res = await fetch(`${apiUrl}/api/v1/auth/whoami`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as { user: { name: string; roles: string[] } | null };
+      if (!data.user) {
+        console.log('Not authenticated');
+        return;
+      }
+      console.log(`User:  ${data.user.name}`);
+      console.log(`Roles: ${data.user.roles.join(', ')}`);
+    });
+
+  // ----- Phase 8: Roles commands -----
+
+  const roles = program.command('roles').description('RBAC role management');
+
+  roles
+    .command('list')
+    .description('List available RBAC roles')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/roles`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        roles: Array<{ name: string; namespace?: string; spec: { rules: Array<{ resources: string[]; verbs: string[] }> } }>;
+      };
+
+      if (data.roles.length === 0) {
+        console.log('No roles configured.');
+        return;
+      }
+
+      console.log('NAME                 SCOPE            RULES');
+      console.log('─'.repeat(70));
+      for (const r of data.roles) {
+        const scope = r.namespace ?? 'cluster-wide';
+        const ruleCount = r.spec.rules.length;
+        console.log(`${r.name.padEnd(21)}${scope.padEnd(17)}${ruleCount} rule(s)`);
+      }
+    });
+
+  roles
+    .command('describe <name>')
+    .description('Show detailed role information')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (name: string, opts: { apiUrl?: string; token?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const res = await fetch(`${apiUrl}/api/v1/roles/${encodeURIComponent(name)}`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const role = (await res.json()) as {
+        name: string; namespace?: string;
+        spec: { rules: Array<{ resources: string[]; verbs: string[]; maxAllocation?: number }> };
+      };
+
+      console.log(`Name:      ${role.name}`);
+      console.log(`Scope:     ${role.namespace ?? 'cluster-wide'}`);
+      console.log(`Rules:`);
+      for (const [i, rule] of role.spec.rules.entries()) {
+        console.log(`  [${i + 1}] Resources: ${rule.resources.join(', ')}`);
+        console.log(`      Verbs:     ${rule.verbs.join(', ')}`);
+        if (rule.maxAllocation !== undefined) {
+          console.log(`      Max alloc: $${rule.maxAllocation.toFixed(2)}`);
+        }
+      }
+    });
+
+  // ----- Phase 8: MCP commands -----
+
+  const mcp = program.command('mcp').description('MCP Gateway commands');
+
+  mcp
+    .command('serve')
+    .description('Start the MCP Gateway server')
+    .option('--port <port>', 'Port to listen on', '3001')
+    .option('--api-url <url>', 'kAIs API URL for the gateway to connect to')
+    .action((opts: { port: string; apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const port = opts.port;
+      console.log(`Starting MCP Gateway on port ${port}, connecting to ${apiUrl}...`);
+      try {
+        execSync(
+          `KAIS_API_URL=${apiUrl} MCP_PORT=${port} npx @kais/mcp-gateway`,
+          { stdio: 'inherit' },
+        );
+      } catch {
+        console.error('MCP Gateway exited');
+        process.exitCode = 1;
+      }
+    });
+
+  mcp
+    .command('status')
+    .description('Check MCP Gateway health')
+    .option('--port <port>', 'MCP Gateway port', '3001')
+    .action(async (opts: { port: string }) => {
+      try {
+        const res = await fetch(`http://localhost:${opts.port}/healthz`);
+        if (res.ok) {
+          console.log(`MCP Gateway is running on port ${opts.port}`);
+        } else {
+          console.log(`MCP Gateway returned ${res.status}`);
+          process.exitCode = 1;
+        }
+      } catch {
+        console.log(`MCP Gateway is not running on port ${opts.port}`);
+        process.exitCode = 1;
+      }
+    });
+
+  // ----- Phase 8: Audit log command -----
+
+  const audit = program.command('audit').description('Audit log commands');
+
+  audit
+    .command('log')
+    .description('Query the audit log')
+    .option('--actor <actor>', 'Filter by actor')
+    .option('--action <action>', 'Filter by action (create, update, delete, get)')
+    .option('--resource <type>', 'Filter by resource type')
+    .option('-n, --namespace <ns>', 'Filter by namespace')
+    .option('--since <date>', 'Start date (ISO format)')
+    .option('--until <date>', 'End date (ISO format)')
+    .option('--limit <n>', 'Maximum entries', '50')
+    .option('--api-url <url>', 'API server URL')
+    .option('--token <token>', 'Auth token')
+    .action(async (opts: {
+      actor?: string; action?: string; resource?: string; namespace?: string;
+      since?: string; until?: string; limit: string; apiUrl?: string; token?: string;
+    }) => {
+      const apiUrl = getApiUrl(opts);
+      const headers = authHeaders(opts);
+      const params = new URLSearchParams();
+      if (opts.actor) params.set('actor', opts.actor);
+      if (opts.action) params.set('action', opts.action);
+      if (opts.resource) params.set('resourceType', opts.resource);
+      if (opts.namespace) params.set('namespace', opts.namespace);
+      if (opts.since) params.set('since', opts.since);
+      if (opts.until) params.set('until', opts.until);
+      params.set('limit', opts.limit);
+
+      const res = await fetch(`${apiUrl}/api/v1/audit-log?${params.toString()}`, { headers });
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = (await res.json()) as {
+        entries: Array<{
+          id: number; actor: string; action: string; resourceType: string;
+          resourceId?: string; namespace: string; outcome: string; statusCode: number;
+          timestamp: string;
+        }>;
+        total: number;
+      };
+
+      if (data.entries.length === 0) {
+        console.log('No audit entries found.');
+        return;
+      }
+
+      console.log(`Showing ${data.entries.length} of ${data.total} entries\n`);
+      console.log('ID     ACTOR           ACTION   RESOURCE          NAMESPACE   OUTCOME  TIME');
+      console.log('─'.repeat(95));
+      for (const e of data.entries) {
+        const time = new Date(e.timestamp).toLocaleString();
+        const resource = e.resourceId ? `${e.resourceType}/${e.resourceId}` : e.resourceType;
+        console.log(
+          `${String(e.id).padEnd(7)}${e.actor.padEnd(16)}${e.action.padEnd(9)}${resource.padEnd(18)}${e.namespace.padEnd(12)}${e.outcome.padEnd(9)}${time}`,
+        );
       }
     });
 
