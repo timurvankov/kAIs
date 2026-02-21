@@ -154,6 +154,8 @@ spec:
                       cost:
                         type: number
                     required: ["name", "phase", "cost"]
+                message:
+                  type: string
       subresources:
         status: {}
       additionalPrinterColumns:

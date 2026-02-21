@@ -48,8 +48,7 @@ export function createProgram(): Command {
       .allowUnknownOption()
       .allowExcessArguments()
       .action((_opts, command: Command) => {
-        const args = command.args.join(' ');
-        execSync(`kubectl ${cmd} ${args}`, { stdio: 'inherit' });
+        execFileSync('kubectl', [cmd, ...command.args], { stdio: 'inherit' });
       });
   }
 
@@ -291,8 +290,8 @@ export function createProgram(): Command {
         return;
       }
       const replicas = parseInt(opts.replicas, 10);
-      if (isNaN(replicas) || replicas < 0) {
-        console.error('Error: --replicas must be a non-negative integer');
+      if (isNaN(replicas) || replicas < 1) {
+        console.error('Error: --replicas must be a positive integer');
         process.exitCode = 1;
         return;
       }

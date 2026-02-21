@@ -49,41 +49,41 @@ describe('kais CLI', () => {
 
   describe('kubectl passthrough', () => {
     it('apply passes through to kubectl', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       await runProgram(['apply', '-f', 'cell.yaml']);
 
-      expect(mockedExec).toHaveBeenCalledWith('kubectl apply -f cell.yaml', { stdio: 'inherit' });
+      expect(mockedExecFile).toHaveBeenCalledWith('kubectl', ['apply', '-f', 'cell.yaml'], { stdio: 'inherit' });
     });
 
     it('get passes through to kubectl', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       await runProgram(['get', 'cells']);
 
-      expect(mockedExec).toHaveBeenCalledWith('kubectl get cells', { stdio: 'inherit' });
+      expect(mockedExecFile).toHaveBeenCalledWith('kubectl', ['get', 'cells'], { stdio: 'inherit' });
     });
 
     it('describe passes through to kubectl', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       await runProgram(['describe', 'cell', 'researcher']);
 
-      expect(mockedExec).toHaveBeenCalledWith('kubectl describe cell researcher', {
+      expect(mockedExecFile).toHaveBeenCalledWith('kubectl', ['describe', 'cell', 'researcher'], {
         stdio: 'inherit',
       });
     });
 
     it('delete passes through to kubectl', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       await runProgram(['delete', 'cell', 'researcher']);
 
-      expect(mockedExec).toHaveBeenCalledWith('kubectl delete cell researcher', {
+      expect(mockedExecFile).toHaveBeenCalledWith('kubectl', ['delete', 'cell', 'researcher'], {
         stdio: 'inherit',
       });
     });
@@ -391,7 +391,7 @@ describe('kais CLI', () => {
     it('errors when --replicas is not a valid number', async () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       await runProgram(['scale', 'formation', 'my-team', '--cell', 'worker', '--replicas', 'abc']);
-      expect(consoleSpy).toHaveBeenCalledWith('Error: --replicas must be a non-negative integer');
+      expect(consoleSpy).toHaveBeenCalledWith('Error: --replicas must be a positive integer');
       consoleSpy.mockRestore();
     });
   });

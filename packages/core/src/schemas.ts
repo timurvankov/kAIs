@@ -206,6 +206,7 @@ export const FormationStatusSchema = z.object({
   totalCells: z.number().int().nonnegative(),
   totalCost: z.number().nonnegative(),
   cells: z.array(FormationCellStatusSchema).optional(),
+  message: z.string().optional(),
 });
 
 // --- CompletionCheck ---
