@@ -1,0 +1,55 @@
+# Phase 8.3/8.4 — Cell with spawn approval policy
+# Children spawned by this cell require human approval before creation.
+
+---
+apiVersion: kais.io/v1
+kind: Cell
+metadata:
+  name: architect
+  namespace: secure-project
+spec:
+  mind:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    systemPrompt: |
+      You are an architect cell that plans complex tasks.
+      You can request to spawn sub-teams for implementation.
+      All spawn requests require human approval.
+    temperature: 0.3
+  tools:
+    - name: spawn_cell
+    - name: send_message
+    - name: recall
+    - name: remember
+  resources:
+    maxTotalCost: 50.00
+    memoryLimit: 512Mi
+    cpuLimit: 500m
+  # Recursion config — enables child spawning with approval
+  recursion:
+    maxDepth: 3
+    maxDescendants: 20
+    spawnPolicy: approval_required
+
+---
+# Example SpawnRequest that would be created when architect tries to spawn:
+#
+# apiVersion: kais.io/v1
+# kind: SpawnRequest
+# metadata:
+#   name: req-architect-001
+#   namespace: secure-project
+# spec:
+#   requestor: architect
+#   requestedCell:
+#     name: security-auditor
+#     systemPrompt: "Audit all code for security vulnerabilities..."
+#     model: claude-sonnet-4-20250514
+#     budget: 15.00
+#     canSpawnChildren: false
+#   reason: "Need dedicated security review for auth module"
+# status:
+#   phase: Pending
+#
+# Approve with: kais spawn-requests approve req-architect-001
+# Reject with:  kais spawn-requests reject req-architect-001 --reason "Use existing reviewer"

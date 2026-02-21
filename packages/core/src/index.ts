@@ -95,3 +95,33 @@ export { withRetry } from './retry.js';
 
 // Envelope helper
 export { createEnvelope } from './envelope.js';
+
+// RBAC schemas
+export {
+  AuthConfigSchema,
+  AuthUserSchema,
+  RbacCheckRequestSchema,
+  RbacCheckResultSchema,
+  RbacResourceSchema,
+  RbacRuleSchema,
+  RbacVerbSchema,
+  RoleBindingSchema,
+  RoleSchema,
+  RoleSpecSchema,
+  StaticTokenEntrySchema,
+} from './rbac-schemas.js';
+
+// RBAC types
+export type {
+  AuthConfig,
+  AuthUser,
+  RbacCheckRequest,
+  RbacCheckResult,
+  RbacResource,
+  RbacRule,
+  RbacVerb,
+  Role,
+  RoleBinding,
+  RoleSpec,
+  StaticTokenEntry,
+} from './rbac-types.js';

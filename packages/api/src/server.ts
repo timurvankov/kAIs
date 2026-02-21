@@ -1,8 +1,12 @@
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 
 import { createEnvelope } from '@kais/core';
+import type { AuthUser, RbacResource, RbacVerb } from '@kais/core';
 import type { DbClient, NatsClient } from './clients.js';
+import type { AuthProvider } from './auth.js';
+import { extractBearerToken } from './auth.js';
+import type { RbacService } from './rbac.js';
 
 /**
  * RFC 1123 label: lowercase alphanumeric and hyphens, 1-63 chars,
@@ -14,11 +18,34 @@ export function validateIdentifier(value: string): boolean {
   return SAFE_IDENTIFIER.test(value);
 }
 
+/** HTTP method → RBAC verb mapping. */
+function httpMethodToVerb(method: string): RbacVerb {
+  switch (method.toUpperCase()) {
+    case 'GET': return 'get';
+    case 'POST': return 'create';
+    case 'PUT': return 'update';
+    case 'PATCH': return 'update';
+    case 'DELETE': return 'delete';
+    default: return 'get';
+  }
+}
+
+/** Extract the resource type from a URL path segment. */
+function extractResource(url: string): RbacResource | undefined {
+  const match = /\/api\/v1\/(\w[\w-]*)/.exec(url);
+  if (!match?.[1]) return undefined;
+  return match[1] as RbacResource;
+}
+
 /** Options for building the kAIs API server. */
 export interface BuildServerOptions {
   nats: NatsClient;
   db: DbClient;
   logger?: boolean;
+  /** Auth provider — if omitted, RBAC is disabled (open access). */
+  auth?: AuthProvider;
+  /** RBAC service — if omitted, RBAC is disabled (open access). */
+  rbac?: RbacService;
 }
 
 /**
@@ -26,10 +53,59 @@ export interface BuildServerOptions {
  * Does NOT call listen() — the caller is responsible for starting it.
  */
 export async function buildServer(opts: BuildServerOptions): Promise<FastifyInstance> {
-  const { nats, db, logger = true } = opts;
+  const { nats, db, logger = true, auth, rbac } = opts;
 
   const app = Fastify({ logger });
   await app.register(fastifyWebsocket);
+
+  // ---------- Decorate request with user ----------
+
+  app.decorateRequest('user', undefined);
+
+  // ---------- Auth + RBAC hooks ----------
+
+  if (auth && rbac) {
+    app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+      // Skip auth for health checks
+      if (req.url === '/healthz') return;
+
+      const token = extractBearerToken(req.headers.authorization);
+      if (!token) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Missing or invalid Authorization header. Use: Bearer <token>',
+        });
+      }
+
+      const user = await auth.authenticate(token);
+      if (!user) {
+        return reply.status(401).send({
+          error: 'Unauthorized',
+          message: 'Invalid token',
+        });
+      }
+
+      // Attach user to request for downstream use
+      (req as FastifyRequest & { user: AuthUser }).user = user;
+
+      // Determine resource + verb from the request
+      const resource = extractResource(req.url);
+      if (!resource) return; // Non-API routes (healthz etc.) pass through
+
+      const verb: RbacVerb = httpMethodToVerb(req.method);
+      const namespace = (req.query as Record<string, string | undefined>).namespace
+        ?? (req.body as Record<string, string | undefined> | null)?.namespace
+        ?? 'default';
+
+      const check = await rbac.check({ user, resource, verb, namespace });
+      if (!check.allowed) {
+        return reply.status(403).send({
+          error: 'Forbidden',
+          message: check.reason ?? `User ${user.name} cannot ${verb} ${resource}`,
+        });
+      }
+    });
+  }
 
   // ---------- Health check ----------
 

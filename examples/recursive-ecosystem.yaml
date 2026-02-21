@@ -1,0 +1,79 @@
+# Phase 8.1 — Recursive ecosystem example
+# A project-lead cell that spawns sub-teams, which spawn their own sub-teams.
+
+---
+apiVersion: kais.io/v1
+kind: Formation
+metadata:
+  name: saas-builder
+  namespace: big-project
+spec:
+  cells:
+    - name: project-lead
+      replicas: 1
+      spec:
+        mind:
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          systemPrompt: |
+            You are a project lead building a SaaS application.
+            You have sub-team blueprints available:
+            - code-review-team: for backend/frontend implementation
+            - qa-team: for testing
+            Use spawn_cell with blueprintRef to create sub-teams.
+            Allocate budget wisely across teams.
+            Keep a reserve for coordination.
+          temperature: 0.3
+        tools:
+          - name: spawn_cell
+          - name: send_message
+          - name: recall
+          - name: remember
+        resources:
+          maxTotalCost: 50.00
+        # Recursive spawning enabled
+        recursion:
+          maxDepth: 3
+          maxDescendants: 25
+          spawnPolicy: open
+
+  topology:
+    type: star
+    hub: project-lead
+
+  budget:
+    maxTotalCost: 50.00
+
+---
+apiVersion: kais.io/v1
+kind: Mission
+metadata:
+  name: build-bookmark-saas
+  namespace: big-project
+spec:
+  formationRef: saas-builder
+  objective: |
+    Build a bookmark management SaaS with:
+    - User authentication (JWT)
+    - CRUD for bookmarks
+    - Tag support
+    - Full-text search
+    - Dashboard with stats
+  completion:
+    checks:
+      - name: api-routes-exist
+        type: fileExists
+        paths:
+          - /workspace/shared/src/routes/auth.ts
+          - /workspace/shared/src/routes/bookmarks.ts
+      - name: tests-pass
+        type: command
+        command: "cd /workspace/shared && npm test"
+        successPattern: "Tests.*passed"
+    maxAttempts: 3
+    timeout: "30m"
+  entrypoint:
+    cell: project-lead
+    message: "Build the bookmark management SaaS application as described in the objective."
+  budget:
+    maxCost: 50.00
