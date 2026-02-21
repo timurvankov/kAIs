@@ -57,3 +57,37 @@ CREATE TABLE IF NOT EXISTS spawn_requests (
 
 CREATE INDEX IF NOT EXISTS idx_spawn_requests_status ON spawn_requests(status);
 CREATE INDEX IF NOT EXISTS idx_spawn_requests_requestor ON spawn_requests(requestor_cell_id);
+
+-- NATS credentials (per-Cell authentication)
+CREATE TABLE IF NOT EXISTS nats_credentials (
+  id BIGSERIAL PRIMARY KEY,
+  cell_id TEXT NOT NULL,
+  namespace TEXT NOT NULL DEFAULT 'default',
+  username TEXT NOT NULL,
+  password TEXT NOT NULL,
+  permissions JSONB NOT NULL,            -- {publish: [...], subscribe: [...]}
+  created_at TIMESTAMPTZ DEFAULT now(),
+  revoked_at TIMESTAMPTZ                 -- NULL = active
+);
+
+CREATE INDEX IF NOT EXISTS idx_nats_creds_cell ON nats_credentials(cell_id);
+CREATE INDEX IF NOT EXISTS idx_nats_creds_active ON nats_credentials(cell_id) WHERE revoked_at IS NULL;
+
+-- Audit log (append-only, immutable)
+CREATE TABLE IF NOT EXISTS audit_log (
+  id BIGSERIAL PRIMARY KEY,
+  timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor TEXT NOT NULL,                    -- user name or cell ID
+  action TEXT NOT NULL,                   -- create, update, delete, approve, etc.
+  resource_type TEXT NOT NULL,            -- cells, formations, missions, budgets, etc.
+  resource_id TEXT,                       -- specific resource name/ID
+  namespace TEXT NOT NULL DEFAULT 'default',
+  detail JSONB,                           -- request body, result, etc.
+  outcome TEXT NOT NULL CHECK (outcome IN ('success', 'failure')),
+  status_code INT                         -- HTTP status code if from API
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_actor ON audit_log(actor);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_time ON audit_log(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, resource_id);

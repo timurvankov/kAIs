@@ -222,3 +222,19 @@ export type {
   SpawnRequestPhase,
   SpawnValidationResult,
 } from './recursion-types.js';
+
+// NATS Auth + Audit Log schemas
+export {
+  AuditActionSchema,
+  AuditEntrySchema,
+  NatsCredentialsSchema,
+  NatsPermissionSchema,
+} from './nats-auth-schemas.js';
+
+// NATS Auth + Audit Log types
+export type {
+  AuditAction,
+  AuditEntry,
+  NatsCredentials,
+  NatsPermission,
+} from './nats-auth-types.js';
