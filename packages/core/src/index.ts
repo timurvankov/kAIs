@@ -238,3 +238,47 @@ export type {
   RoleSpec,
   StaticTokenEntry,
 } from './rbac-types.js';
+
+// Recursion / Budget / SpawnRequest schemas
+export {
+  BudgetBalanceSchema,
+  BudgetLedgerEntrySchema,
+  BudgetOperationSchema,
+  CellTreeNodeSchema,
+  RecursionSpecSchema,
+  RequestedCellSpecSchema,
+  SpawnPolicySchema,
+  SpawnRequestPhaseSchema,
+  SpawnRequestSchema,
+  SpawnValidationResultSchema,
+} from './recursion-schemas.js';
+
+// Recursion / Budget / SpawnRequest types
+export type {
+  BudgetBalance,
+  BudgetLedgerEntry,
+  BudgetOperation,
+  CellTreeNode,
+  RecursionSpec,
+  RequestedCellSpec,
+  SpawnPolicy,
+  SpawnRequest,
+  SpawnRequestPhase,
+  SpawnValidationResult,
+} from './recursion-types.js';
+
+// NATS Auth + Audit Log schemas
+export {
+  AuditActionSchema,
+  AuditEntrySchema,
+  NatsCredentialsSchema,
+  NatsPermissionSchema,
+} from './nats-auth-schemas.js';
+
+// NATS Auth + Audit Log types
+export type {
+  AuditAction,
+  AuditEntry,
+  NatsCredentials,
+  NatsPermission,
+} from './nats-auth-types.js';

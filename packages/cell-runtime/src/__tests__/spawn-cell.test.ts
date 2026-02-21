@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { CellSpec } from '@kais/core';
+import type { CellSpec, RecursionSpec, SpawnValidationResult } from '@kais/core';
 
 import { createSpawnCellTool } from '../tools/spawn-cell.js';
-import type { KubeClientLite, CellResourceLite, SpawnCellConfig } from '../tools/spawn-cell.js';
+import type { KubeClientLite, CellResourceLite, SpawnCellConfig, RecursionValidatorFn } from '../tools/spawn-cell.js';
 
 class MockKubeClient implements KubeClientLite {
   public createdCells: CellResourceLite[] = [];
@@ -250,5 +250,140 @@ describe('spawn_cell tool', () => {
     await expect(tool.execute({ name: '' })).rejects.toThrow();
     await expect(tool.execute({ name: 'x' })).rejects.toThrow(); // missing systemPrompt
     await expect(tool.execute(undefined)).rejects.toThrow();
+  });
+
+  // ========== Phase 8: spawn_cell v2 tests ==========
+
+  describe('v2: canSpawnChildren', () => {
+    it('should include canSpawnChildren in result', async () => {
+      const config = makeConfig();
+      const tool = createSpawnCellTool(config);
+
+      const resultStr = await tool.execute({
+        name: 'coordinator',
+        systemPrompt: 'You coordinate.',
+        canSpawnChildren: true,
+      });
+      const result = JSON.parse(resultStr);
+      expect(result.canSpawnChildren).toBe(true);
+    });
+
+    it('should default canSpawnChildren to false', async () => {
+      const config = makeConfig();
+      const tool = createSpawnCellTool(config);
+
+      const resultStr = await tool.execute({
+        name: 'worker',
+        systemPrompt: 'You work.',
+      });
+      const result = JSON.parse(resultStr);
+      expect(result.canSpawnChildren).toBe(false);
+    });
+  });
+
+  describe('v2: recursion validator', () => {
+    it('should call recursion validator when provided', async () => {
+      let validatorCalled = false;
+      const mockValidator: RecursionValidatorFn = async () => {
+        validatorCalled = true;
+        return { allowed: true };
+      };
+
+      const config = makeConfig({ recursionValidator: mockValidator });
+      const tool = createSpawnCellTool(config);
+
+      await tool.execute({ name: 'child', systemPrompt: 'test' });
+      expect(validatorCalled).toBe(true);
+    });
+
+    it('should reject spawn when validator returns not allowed', async () => {
+      const mockValidator: RecursionValidatorFn = async () => ({
+        allowed: false,
+        reason: 'Max depth 5 reached',
+      });
+
+      const config = makeConfig({ recursionValidator: mockValidator });
+      const tool = createSpawnCellTool(config);
+
+      await expect(
+        tool.execute({ name: 'child', systemPrompt: 'test' }),
+      ).rejects.toThrow('Spawn rejected: Max depth 5 reached');
+
+      // No cell should have been created
+      expect(config.kubeClient.createdCells).toHaveLength(0);
+    });
+
+    it('should return pending_approval status when validator queues approval', async () => {
+      const mockValidator: RecursionValidatorFn = async () => ({
+        allowed: false,
+        reason: 'Queued for approval',
+        pending: true,
+      });
+
+      const config = makeConfig({ recursionValidator: mockValidator });
+      const tool = createSpawnCellTool(config);
+
+      const resultStr = await tool.execute({ name: 'child', systemPrompt: 'test' });
+      const result = JSON.parse(resultStr);
+      expect(result.status).toBe('pending_approval');
+      expect(result.reason).toBe('Queued for approval');
+
+      // No cell should have been created
+      expect(config.kubeClient.createdCells).toHaveLength(0);
+    });
+
+    it('should pass parent recursion config to validator', async () => {
+      let receivedRecursion: RecursionSpec | undefined;
+      const mockValidator: RecursionValidatorFn = async (_parentId, _ns, recursionSpec) => {
+        receivedRecursion = recursionSpec;
+        return { allowed: true };
+      };
+
+      const parentRecursion: RecursionSpec = {
+        maxDepth: 3,
+        maxDescendants: 20,
+        spawnPolicy: 'open',
+      };
+
+      const config = makeConfig({
+        recursionValidator: mockValidator,
+        parentRecursion,
+      });
+      const tool = createSpawnCellTool(config);
+
+      await tool.execute({ name: 'child', systemPrompt: 'test' });
+      expect(receivedRecursion).toEqual(parentRecursion);
+    });
+  });
+
+  describe('v2: blueprintRef', () => {
+    it('should accept blueprintRef parameter', async () => {
+      const config = makeConfig();
+      const tool = createSpawnCellTool(config);
+
+      const resultStr = await tool.execute({
+        name: 'team',
+        systemPrompt: 'Use the blueprint.',
+        blueprintRef: 'code-review-team',
+      });
+      const result = JSON.parse(resultStr);
+      expect(result.status).toBe('spawned');
+    });
+  });
+
+  describe('v2: maxDepth', () => {
+    it('should accept maxDepth parameter', async () => {
+      const config = makeConfig();
+      const tool = createSpawnCellTool(config);
+
+      const resultStr = await tool.execute({
+        name: 'team',
+        systemPrompt: 'You coordinate.',
+        canSpawnChildren: true,
+        maxDepth: 2,
+      });
+      const result = JSON.parse(resultStr);
+      expect(result.status).toBe('spawned');
+    });
   });
 });
