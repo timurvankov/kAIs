@@ -456,6 +456,39 @@ export const SearchOptionsSchema = z.object({
   recency: z.enum(['prefer_recent', 'prefer_established', 'any']).default('any'),
 });
 
+// --- KnowledgeGraph CRD ---
+
+export const KnowledgeGraphPhaseSchema = z.enum(['Pending', 'Provisioning', 'Ready', 'Error']);
+
+export const KnowledgeGraphRetentionSchema = z.object({
+  maxFacts: z.number().int().positive(),
+  ttlDays: z.number().int().positive(),
+});
+
+export const KnowledgeGraphResourcesSchema = z.object({
+  memory: z.string(),
+  cpu: z.string(),
+  storage: z.string().optional(),
+});
+
+export const KnowledgeGraphSpecSchema = z.object({
+  scope: KnowledgeScopeSchema,
+  parentRef: z.string().optional(),
+  dedicated: z.boolean().default(false),
+  inherit: z.boolean().default(true),
+  retention: KnowledgeGraphRetentionSchema.optional(),
+  resources: KnowledgeGraphResourcesSchema.optional(),
+});
+
+export const KnowledgeGraphStatusSchema = z.object({
+  phase: KnowledgeGraphPhaseSchema,
+  endpoint: z.string().optional(),
+  database: z.string().optional(),
+  factCount: z.number().int().optional(),
+  parentChain: z.array(z.string()).optional(),
+  lastSyncedAt: z.string().optional(),
+});
+
 // --- Blueprint ---
 
 export const BlueprintParameterTypeSchema = z.enum([

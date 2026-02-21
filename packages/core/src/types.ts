@@ -56,6 +56,11 @@ import type {
   FactSourceSchema,
   FactSchema,
   SearchOptionsSchema,
+  KnowledgeGraphPhaseSchema,
+  KnowledgeGraphRetentionSchema,
+  KnowledgeGraphResourcesSchema,
+  KnowledgeGraphSpecSchema,
+  KnowledgeGraphStatusSchema,
   BlueprintParameterTypeSchema,
   BlueprintParameterSchema,
   BlueprintEvidenceSchema,
@@ -127,6 +132,13 @@ export type FactSourceType = z.infer<typeof FactSourceTypeSchema>;
 export type FactSource = z.infer<typeof FactSourceSchema>;
 export type Fact = z.infer<typeof FactSchema>;
 export type SearchOptions = z.infer<typeof SearchOptionsSchema>;
+
+// KnowledgeGraph types
+export type KnowledgeGraphPhase = z.infer<typeof KnowledgeGraphPhaseSchema>;
+export type KnowledgeGraphRetention = z.infer<typeof KnowledgeGraphRetentionSchema>;
+export type KnowledgeGraphResources = z.infer<typeof KnowledgeGraphResourcesSchema>;
+export type KnowledgeGraphSpec = z.infer<typeof KnowledgeGraphSpecSchema>;
+export type KnowledgeGraphStatus = z.infer<typeof KnowledgeGraphStatusSchema>;
 
 // Blueprint types
 export type BlueprintParameterType = z.infer<typeof BlueprintParameterTypeSchema>;

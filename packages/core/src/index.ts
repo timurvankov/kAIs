@@ -56,6 +56,12 @@ export {
   FactSourceSchema,
   FactSchema,
   SearchOptionsSchema,
+  // KnowledgeGraph schemas
+  KnowledgeGraphPhaseSchema,
+  KnowledgeGraphRetentionSchema,
+  KnowledgeGraphResourcesSchema,
+  KnowledgeGraphSpecSchema,
+  KnowledgeGraphStatusSchema,
   // Blueprint schemas
   BlueprintParameterTypeSchema,
   BlueprintParameterSchema,
@@ -123,6 +129,12 @@ export type {
   FactSource,
   Fact,
   SearchOptions,
+  // KnowledgeGraph types
+  KnowledgeGraphPhase,
+  KnowledgeGraphRetention,
+  KnowledgeGraphResources,
+  KnowledgeGraphSpec,
+  KnowledgeGraphStatus,
   // Blueprint types
   BlueprintParameterType,
   BlueprintParameter,
