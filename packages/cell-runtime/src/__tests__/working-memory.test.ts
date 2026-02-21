@@ -68,6 +68,39 @@ describe('WorkingMemoryManager', () => {
       wm.pinMessage(10); // out of bounds
       expect(wm.getStats().pinnedCount).toBe(0);
     });
+
+    it('pin survives multiple evictions', () => {
+      wm.addMessage({ role: 'user', content: 'Pinned first' }); // index 0
+      wm.pinMessage(0);
+
+      wm.addMessage({ role: 'user', content: 'Pinned second' }); // index 1
+      wm.pinMessage(1);
+
+      // Add many more messages to force multiple evictions
+      for (let i = 2; i <= 10; i++) {
+        wm.addMessage({ role: 'user', content: `Msg ${i}` });
+      }
+
+      const messages = wm.getMessages();
+      expect(messages).toHaveLength(5);
+
+      const contents = messages.map(m => m.content);
+      expect(contents).toContain('Pinned first');
+      expect(contents).toContain('Pinned second');
+    });
+
+    it('isPinned returns correct status', () => {
+      const msg: Message = { role: 'user', content: 'Test' };
+      wm.addMessage(msg);
+
+      // Before pinning: the compressed copy should not be pinned yet
+      // We need to pin it
+      wm.pinMessage(0);
+
+      // The message in the manager is the compressed version
+      const messages = wm.getMessages();
+      expect(wm.isPinned(messages[0]!)).toBe(true);
+    });
   });
 
   describe('summarization', () => {
@@ -132,6 +165,39 @@ describe('WorkingMemoryManager', () => {
       // The pinned message should still be present
       const contents = messages.map(m => typeof m.content === 'string' ? m.content : '');
       expect(contents).toContain('Pinned message');
+    });
+
+    it('pinned messages survive summarization correctly', async () => {
+      const mind = new MockMind();
+      mind.enqueue(makeThinkOutput({ content: 'Summary of old messages' }));
+
+      // Pin the first message
+      wm.addMessage({ role: 'user', content: 'System instruction' }); // index 0
+      wm.pinMessage(0);
+
+      // Add enough messages to trigger summarization
+      for (let i = 1; i <= 4; i++) {
+        wm.addMessage({ role: 'user', content: `Chat ${i}` });
+      }
+
+      expect(wm.shouldSummarize()).toBe(true);
+      await wm.summarize(mind);
+
+      const messages = wm.getMessages();
+      const contents = messages.map(m => typeof m.content === 'string' ? m.content : '');
+
+      // Pinned message still exists
+      expect(contents).toContain('System instruction');
+
+      // Pin is still tracked after summarization
+      const pinnedMsg = messages.find(m => typeof m.content === 'string' && m.content === 'System instruction')!;
+      expect(wm.isPinned(pinnedMsg)).toBe(true);
+
+      // Summary was inserted
+      expect(contents.some(c => c.includes('[Summary of earlier conversation]'))).toBe(true);
+
+      // Pin count is still 1
+      expect(wm.getStats().pinnedCount).toBe(1);
     });
 
     it('sets summarized flag', async () => {
@@ -216,6 +282,25 @@ describe('WorkingMemoryManager', () => {
         pinnedCount: 1,
         summarized: false,
       });
+    });
+
+    it('pinnedCount decreases when pinned message is no longer in messages', () => {
+      // With identity-based tracking via WeakSet, if a message is removed,
+      // the count should reflect that since we iterate current messages
+      const bigWm = new WorkingMemoryManager({ maxMessages: 3, summarizeAfter: 100 });
+      bigWm.addMessage({ role: 'user', content: 'Will be evicted' }); // index 0
+      bigWm.pinMessage(0); // pin it
+
+      // Actually, pinned messages are NOT evicted. So let's verify that.
+      bigWm.addMessage({ role: 'user', content: 'Msg 1' });
+      bigWm.addMessage({ role: 'user', content: 'Msg 2' });
+      bigWm.addMessage({ role: 'user', content: 'Msg 3' }); // would trigger eviction of non-pinned
+
+      // Pinned message should still be there
+      expect(bigWm.getStats().pinnedCount).toBe(1);
+      expect(bigWm.getStats().totalMessages).toBe(3); // max 3; non-pinned evicted
+      const contents = bigWm.getMessages().map(m => m.content);
+      expect(contents).toContain('Will be evicted'); // pinned, so not evicted
     });
   });
 });

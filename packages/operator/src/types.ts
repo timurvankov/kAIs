@@ -37,6 +37,12 @@ export interface KubeClient {
   /** Delete a Pod by name and namespace. */
   deletePod(name: string, namespace: string): Promise<void>;
 
+  /** List Pods matching a label selector. */
+  listPods(namespace: string, labelSelector: string): Promise<k8s.V1PodList>;
+
+  /** Get a Cell CRD by name and namespace. Returns null if not found. */
+  getCell(name: string, namespace: string): Promise<CellResource | null>;
+
   /** Update the status subresource of a Cell CRD. */
   updateCellStatus(
     name: string,

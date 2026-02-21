@@ -586,7 +586,7 @@ describe('OpenAIMind', () => {
       });
 
       const callArgs = createMock.mock.calls[0]![0] as Record<string, unknown>;
-      expect(callArgs['max_tokens']).toBeUndefined();
+      expect(callArgs['max_tokens']).toBe(4096); // defaults to 4096 for consistency with Anthropic
       expect(callArgs['temperature']).toBeUndefined();
     });
   });

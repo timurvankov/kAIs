@@ -49,13 +49,27 @@ export class BudgetTracker {
     this.maxTotalCost = maxTotalCost;
   }
 
+  /**
+   * Prune cost entries older than 1 hour to prevent unbounded growth.
+   * Called on every addCost() so that getters remain side-effect-free.
+   */
+  private pruneOldEntries(): void {
+    const oneHourAgo = Date.now() - 3_600_000;
+    this.costEntries = this.costEntries.filter(e => e.timestamp >= oneHourAgo);
+  }
+
   addCost(cost: number): void {
     this.totalCost += cost;
     this.costEntries.push({ timestamp: Date.now(), cost });
+    this.pruneOldEntries();
   }
 
   getTotalCost(): number {
     return this.totalCost;
+  }
+
+  private getRecentCost(): number {
+    return this.costEntries.reduce((sum, e) => sum + e.cost, 0);
   }
 
   isExceeded(): boolean {
@@ -63,14 +77,8 @@ export class BudgetTracker {
       return true;
     }
 
-    if (this.maxCostPerHour !== undefined) {
-      const oneHourAgo = Date.now() - 3_600_000;
-      // Prune entries older than 1 hour to prevent unbounded growth (I5)
-      this.costEntries = this.costEntries.filter(e => e.timestamp >= oneHourAgo);
-      const recentCost = this.costEntries.reduce((sum, e) => sum + e.cost, 0);
-      if (recentCost >= this.maxCostPerHour) {
-        return true;
-      }
+    if (this.maxCostPerHour !== undefined && this.getRecentCost() >= this.maxCostPerHour) {
+      return true;
     }
 
     return false;
@@ -81,10 +89,7 @@ export class BudgetTracker {
       return `Total cost $${this.totalCost.toFixed(4)} exceeds max $${this.maxTotalCost}`;
     }
     if (this.maxCostPerHour !== undefined) {
-      const oneHourAgo = Date.now() - 3_600_000;
-      // Prune entries older than 1 hour to prevent unbounded growth (I5)
-      this.costEntries = this.costEntries.filter(e => e.timestamp >= oneHourAgo);
-      const recentCost = this.costEntries.reduce((sum, e) => sum + e.cost, 0);
+      const recentCost = this.getRecentCost();
       if (recentCost >= this.maxCostPerHour) {
         return `Hourly cost $${recentCost.toFixed(4)} exceeds max $${this.maxCostPerHour}/hour`;
       }
@@ -254,12 +259,24 @@ export class CellRuntime {
       const tools: ToolDefinition[] = this.toolExecutor.getDefinitions();
 
       // Call Mind.think()
-      const thinkOutput: ThinkOutput = await this.mind.think({
-        messages,
-        tools: tools.length > 0 ? tools : undefined,
-        temperature: this.spec.mind.temperature,
-        maxTokens: this.spec.mind.maxTokens,
-      });
+      let thinkOutput: ThinkOutput;
+      try {
+        thinkOutput = await this.mind.think({
+          messages,
+          tools: tools.length > 0 ? tools : undefined,
+          temperature: this.spec.mind.temperature,
+          maxTokens: this.spec.mind.maxTokens,
+        });
+      } catch (err) {
+        const errorMsg: Message = {
+          role: 'assistant',
+          content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        };
+        this.workingMemory.addMessage(errorMsg);
+        this.publishOutbox(errorMsg, envelope);
+        this.publishEvent('error', { messageId: envelope.id, error: String(err) });
+        return;
+      }
 
       // Track cost
       this.budget.addCost(thinkOutput.usage.cost);

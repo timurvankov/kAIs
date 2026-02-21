@@ -444,6 +444,67 @@ describe('CellRuntime', () => {
     });
   });
 
+  describe('processMessage — mind.think() error handling (I1)', () => {
+    it('catches mind.think() error and publishes error response', async () => {
+      mind.setError(new Error('Network timeout'));
+
+      const runtime = new CellRuntime({
+        cellName: 'test-cell',
+        namespace: 'default',
+        spec: makeSpec(),
+        mind,
+        nats,
+      });
+
+      const envelope = makeEnvelope({ payload: { content: 'Hello' } });
+      await runtime.processMessage(envelope);
+
+      // Should NOT throw — the error is caught
+
+      // Should publish an error response to outbox
+      const outboxMessages = nats.getPublished('cell.default.test-cell.outbox');
+      expect(outboxMessages).toHaveLength(1);
+      const response = JSON.parse(outboxMessages[0]!.data);
+      expect(response.payload.content).toContain('Error: Network timeout');
+
+      // Should publish an error event
+      const events = nats.getPublished('cell.events.default.test-cell');
+      const errorEvent = events.map(e => JSON.parse(e.data)).find(e => e.type === 'error');
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent.messageId).toBe(envelope.id);
+      expect(errorEvent.error).toContain('Network timeout');
+    });
+
+    it('does not break the queue after mind.think() error', async () => {
+      // First call: error
+      mind.setError(new Error('Auth error'));
+
+      const runtime = new CellRuntime({
+        cellName: 'test-cell',
+        namespace: 'default',
+        spec: makeSpec(),
+        mind,
+        nats,
+      });
+
+      const envelope1 = makeEnvelope({ payload: { content: 'msg 1' } });
+      await runtime.processMessage(envelope1);
+
+      // Clear error and enqueue a successful response for the next message
+      mind.clearError();
+      mind.enqueue(makeThinkOutput({ content: 'Success!' }));
+
+      const envelope2 = makeEnvelope({ payload: { content: 'msg 2' } });
+      await runtime.processMessage(envelope2);
+
+      // Second call should succeed
+      const outboxMessages = nats.getPublished('cell.default.test-cell.outbox');
+      expect(outboxMessages).toHaveLength(2);
+      const response2 = JSON.parse(outboxMessages[1]!.data);
+      expect(response2.payload.content).toBe('Success!');
+    });
+  });
+
   describe('max iterations (I6)', () => {
     it('publishes response and event when max iterations reached', async () => {
       // Enqueue 21 tool-use responses (more than the 20-iteration limit)

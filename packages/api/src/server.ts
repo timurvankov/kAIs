@@ -124,10 +124,10 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     const result = await db.query(
       `SELECT
          COUNT(*) as events,
-         COALESCE(SUM((payload->>'cost')::numeric), 0) as total_cost,
-         COALESCE(SUM((payload->>'tokens')::integer), 0) as total_tokens
+         COALESCE(SUM((payload->'usage'->>'cost')::numeric), 0) as total_cost,
+         COALESCE(SUM((payload->'usage'->>'totalTokens')::integer), 0) as total_tokens
        FROM cell_events
-       WHERE cell_name = $1 AND namespace = $2`,
+       WHERE cell_name = $1 AND namespace = $2 AND event_type = 'response'`,
       [name, namespace],
     );
 

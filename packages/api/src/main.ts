@@ -11,6 +11,7 @@ import { connect } from 'nats';
 import pg from 'pg';
 
 import { buildServer } from './server.js';
+import { EventConsumer } from './event-consumer.js';
 import type { DbClient, NatsClient } from './clients.js';
 
 const NATS_URL = process.env['NATS_URL'] ?? 'nats://localhost:4222';
@@ -50,6 +51,10 @@ async function main(): Promise<void> {
   // Build & start
   const app = await buildServer({ nats, db });
 
+  // Start NATS-to-Postgres event consumer
+  const eventConsumer = new EventConsumer(nats, db);
+  await eventConsumer.start();
+
   try {
     await app.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`kAIs API server listening on port ${PORT}`);
@@ -60,6 +65,7 @@ async function main(): Promise<void> {
 
   // Graceful shutdown — drain NATS and close Postgres pool on termination
   const shutdown = async () => {
+    await eventConsumer.stop();
     await app.close();
     await nc.drain();
     await pool.end();

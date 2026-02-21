@@ -4,7 +4,7 @@
  * Features:
  * - Sliding window: keeps last N messages (configurable)
  * - Summarization: when window exceeds threshold, summarizes oldest non-pinned messages
- * - Pinned messages: never evicted or summarized
+ * - Pinned messages: never evicted or summarized (tracked by identity, not index)
  * - Tool result compression: long tool results are truncated
  */
 import type { Mind, Message, ContentBlock } from '@kais/mind';
@@ -26,7 +26,7 @@ export interface WorkingMemoryConfig {
 
 export class WorkingMemoryManager {
   private messages: Message[] = [];
-  private pinnedIndices: Set<number> = new Set();
+  private pinnedMessages: WeakSet<Message> = new WeakSet();
   private hasSummarized = false;
   private readonly maxMessages: number;
   private readonly summarizeAfter: number;
@@ -65,23 +65,34 @@ export class WorkingMemoryManager {
   /**
    * Pin a message so it's never evicted or summarized.
    * The index is the current position in the messages array.
+   * The pin is tracked by message identity (object reference), not by index.
    */
   pinMessage(index: number): void {
     if (index >= 0 && index < this.messages.length) {
-      // We need to track which message object is pinned, not the index,
-      // because indices shift when messages are removed.
-      // Store the actual index for now, but we'll use a stable ID approach.
-      this.pinnedIndices.add(index);
+      this.pinnedMessages.add(this.messages[index]!);
     }
+  }
+
+  /**
+   * Check if a message is pinned (by reference).
+   */
+  isPinned(message: Message): boolean {
+    return this.pinnedMessages.has(message);
   }
 
   /**
    * Get current memory stats.
    */
   getStats(): WorkingMemoryStats {
+    let pinnedCount = 0;
+    for (const msg of this.messages) {
+      if (this.pinnedMessages.has(msg)) {
+        pinnedCount++;
+      }
+    }
     return {
       totalMessages: this.messages.length,
-      pinnedCount: this.pinnedIndices.size,
+      pinnedCount,
       summarized: this.hasSummarized,
     };
   }
@@ -101,7 +112,7 @@ export class WorkingMemoryManager {
     const targetCount = this.messages.length - this.summarizeAfter;
 
     for (let i = 0; i < this.messages.length && toSummarize.length < targetCount; i++) {
-      if (!this.pinnedIndices.has(i)) {
+      if (!this.pinnedMessages.has(this.messages[i]!)) {
         toSummarize.push({ index: i, message: this.messages[i]! });
       }
     }
@@ -137,7 +148,7 @@ export class WorkingMemoryManager {
 
     // Insert summary at the beginning (after any pinned messages at start)
     let insertAt = 0;
-    while (insertAt < this.messages.length && this.pinnedIndices.has(insertAt)) {
+    while (insertAt < this.messages.length && this.pinnedMessages.has(this.messages[insertAt]!)) {
       insertAt++;
     }
 
@@ -147,9 +158,6 @@ export class WorkingMemoryManager {
     };
 
     this.messages.splice(insertAt, 0, summaryMessage);
-
-    // Recompute pinned indices after the splice
-    this.recomputePinnedIndices();
 
     this.hasSummarized = true;
   }
@@ -187,7 +195,7 @@ export class WorkingMemoryManager {
    */
   private findOldestNonPinned(): number {
     for (let i = 0; i < this.messages.length; i++) {
-      if (!this.pinnedIndices.has(i)) {
+      if (!this.pinnedMessages.has(this.messages[i]!)) {
         return i;
       }
     }
@@ -195,34 +203,10 @@ export class WorkingMemoryManager {
   }
 
   /**
-   * Remove a message at the given index and adjust pinned indices.
+   * Remove a message at the given index.
+   * No index adjustment needed since pins are tracked by identity (WeakSet).
    */
   private removeMessageAt(index: number): void {
     this.messages.splice(index, 1);
-
-    // Adjust pinned indices
-    const newPinned = new Set<number>();
-    for (const pinned of this.pinnedIndices) {
-      if (pinned < index) {
-        newPinned.add(pinned);
-      } else if (pinned > index) {
-        newPinned.add(pinned - 1);
-      }
-      // If pinned === index, it's being removed (shouldn't happen — we don't remove pinned)
-    }
-    this.pinnedIndices = newPinned;
-  }
-
-  /**
-   * Recompute pinned indices after a splice operation.
-   * This is a safety measure; in practice, we track carefully.
-   */
-  private recomputePinnedIndices(): void {
-    // After summarization, we don't preserve pins on the summary message.
-    // Pinned indices that were not removed should still be valid since
-    // removeMessageAt already adjusts them. The splice for the summary
-    // insertion shifts everything after insertAt up by 1.
-    // For simplicity, we accept that pins on the specific summarized messages
-    // have been removed. Other pins remain valid due to removeMessageAt handling.
   }
 }

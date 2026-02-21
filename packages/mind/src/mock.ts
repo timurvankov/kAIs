@@ -13,6 +13,7 @@ export class MockMind implements Mind {
   public readonly calls: ThinkInput[] = [];
 
   private readonly queue: ThinkOutput[] = [];
+  private errorToThrow: Error | null = null;
 
   constructor(model: string = 'mock-model') {
     this.model = model;
@@ -26,15 +27,35 @@ export class MockMind implements Mind {
   }
 
   /**
+   * Set an error to throw on the next think() call(s).
+   * The error will be thrown on every call until clearError() is called.
+   */
+  setError(error: Error): void {
+    this.errorToThrow = error;
+  }
+
+  /**
+   * Clear a previously set error.
+   */
+  clearError(): void {
+    this.errorToThrow = null;
+  }
+
+  /**
    * Clear the response queue and call history.
    */
   reset(): void {
     this.queue.length = 0;
     this.calls.length = 0;
+    this.errorToThrow = null;
   }
 
   async think(input: ThinkInput): Promise<ThinkOutput> {
     this.calls.push(input);
+
+    if (this.errorToThrow) {
+      throw this.errorToThrow;
+    }
 
     const output = this.queue.shift();
     if (!output) {

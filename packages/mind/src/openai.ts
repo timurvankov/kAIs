@@ -168,7 +168,7 @@ export class OpenAIMind implements Mind {
     const params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: this.model,
       messages: mapMessages(input.messages),
-      ...(input.maxTokens !== undefined && { max_tokens: input.maxTokens }),
+      max_tokens: input.maxTokens ?? 4096,
       ...(input.temperature !== undefined && { temperature: input.temperature }),
       ...(input.tools && input.tools.length > 0 && { tools: mapTools(input.tools) }),
     };

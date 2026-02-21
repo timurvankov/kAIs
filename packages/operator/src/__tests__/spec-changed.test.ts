@@ -200,6 +200,21 @@ describe('specChanged', () => {
     expect(specChanged(cell, pod)).toBe(true);
   });
 
+  it('returns false when keys are in different order', () => {
+    const cell = makeCell();
+    // Construct a Pod spec with same values but different key order
+    const reorderedSpec = {
+      mind: {
+        systemPrompt: 'You are a helpful assistant.',
+        model: 'claude-sonnet-4-20250514',
+        provider: 'anthropic' as const,
+      },
+    };
+    const pod = makePod(reorderedSpec);
+
+    expect(specChanged(cell, pod)).toBe(false);
+  });
+
   it('handles matching spec with optional fields', () => {
     const spec = {
       mind: {

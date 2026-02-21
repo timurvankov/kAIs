@@ -8,13 +8,17 @@ const RECONCILE_RETRY_DELAY_MS = 5_000;
 const MAX_RECONCILE_RETRIES = 3;
 
 /**
- * CellController watches Cell CRDs and manages Cell Pods.
+ * CellController watches Cell CRDs and managed Cell Pods.
  *
  * It uses the K8s informer/watch API to react to Cell lifecycle events
  * and ensures each Cell has a corresponding Pod running.
+ *
+ * It also watches Pods with label `kais.io/role=cell` so that externally
+ * deleted or failed Pods trigger reconciliation of their owning Cell.
  */
 export class CellController {
-  private informer: k8s.Informer<k8s.KubernetesObject> | null = null;
+  private cellInformer: k8s.Informer<k8s.KubernetesObject> | null = null;
+  private podInformer: k8s.Informer<k8s.KubernetesObject> | null = null;
   private stopped = false;
 
   constructor(
@@ -23,11 +27,21 @@ export class CellController {
   ) {}
 
   /**
-   * Start watching Cell CRDs across all namespaces.
+   * Start watching Cell CRDs and managed Pods.
    */
   async start(): Promise<void> {
     this.stopped = false;
 
+    await this.startCellInformer();
+    await this.startPodInformer();
+
+    console.log('[CellController] started watching Cell CRDs and Pods');
+  }
+
+  /**
+   * Start the Cell CRD informer.
+   */
+  private async startCellInformer(): Promise<void> {
     const customApi = this.kc.makeApiClient(k8s.CustomObjectsApi);
     const path = '/apis/kais.io/v1/cells';
 
@@ -43,60 +57,104 @@ export class CellController {
       return response as k8s.KubernetesListObject<k8s.KubernetesObject>;
     };
 
-    this.informer = k8s.makeInformer(this.kc, path, listFn);
+    this.cellInformer = k8s.makeInformer(this.kc, path, listFn);
 
-    this.informer.on('add', (obj: k8s.KubernetesObject) => {
-      void this.handleEvent('add', obj);
+    this.cellInformer.on('add', (obj: k8s.KubernetesObject) => {
+      void this.handleCellEvent('add', obj);
     });
 
-    this.informer.on('update', (obj: k8s.KubernetesObject) => {
-      void this.handleEvent('update', obj);
+    this.cellInformer.on('update', (obj: k8s.KubernetesObject) => {
+      void this.handleCellEvent('update', obj);
     });
 
-    this.informer.on('delete', (obj: k8s.KubernetesObject) => {
-      void this.handleEvent('delete', obj);
+    this.cellInformer.on('delete', (obj: k8s.KubernetesObject) => {
+      void this.handleCellEvent('delete', obj);
     });
 
-    this.informer.on('error', (err: unknown) => {
+    this.cellInformer.on('error', (err: unknown) => {
       if (!this.stopped) {
-        console.error('[CellController] watch error:', err);
-        // Restart the informer after a delay
+        console.error('[CellController] cell watch error:', err);
         setTimeout(() => {
           if (!this.stopped) {
-            console.log('[CellController] restarting informer...');
-            void this.informer?.start();
+            console.log('[CellController] restarting cell informer...');
+            void this.cellInformer?.start();
           }
         }, RECONCILE_RETRY_DELAY_MS);
       }
     });
 
-    await this.informer.start();
-    console.log('[CellController] started watching Cell CRDs');
+    await this.cellInformer.start();
   }
 
   /**
-   * Stop watching Cell CRDs.
+   * Start the Pod informer, watching Pods with label kais.io/role=cell.
+   */
+  private async startPodInformer(): Promise<void> {
+    const coreApi = this.kc.makeApiClient(k8s.CoreV1Api);
+    const path = '/api/v1/pods';
+
+    const listFn = async (): Promise<
+      k8s.KubernetesListObject<k8s.KubernetesObject>
+    > => {
+      const response = await coreApi.listPodForAllNamespaces({
+        labelSelector: 'kais.io/role=cell',
+      });
+
+      return response as unknown as k8s.KubernetesListObject<k8s.KubernetesObject>;
+    };
+
+    this.podInformer = k8s.makeInformer(this.kc, path, listFn);
+
+    this.podInformer.on('update', (obj: k8s.KubernetesObject) => {
+      void this.handlePodEvent('update', obj);
+    });
+
+    this.podInformer.on('delete', (obj: k8s.KubernetesObject) => {
+      void this.handlePodEvent('delete', obj);
+    });
+
+    this.podInformer.on('error', (err: unknown) => {
+      if (!this.stopped) {
+        console.error('[CellController] pod watch error:', err);
+        setTimeout(() => {
+          if (!this.stopped) {
+            console.log('[CellController] restarting pod informer...');
+            void this.podInformer?.start();
+          }
+        }, RECONCILE_RETRY_DELAY_MS);
+      }
+    });
+
+    await this.podInformer.start();
+  }
+
+  /**
+   * Stop watching Cell CRDs and Pods.
    */
   stop(): void {
     this.stopped = true;
-    if (this.informer) {
-      void this.informer.stop();
-      this.informer = null;
+    if (this.cellInformer) {
+      void this.cellInformer.stop();
+      this.cellInformer = null;
+    }
+    if (this.podInformer) {
+      void this.podInformer.stop();
+      this.podInformer = null;
     }
     console.log('[CellController] stopped');
   }
 
   /**
-   * Handle an informer event. Runs reconciliation with retry.
+   * Handle a Cell CRD informer event. Runs reconciliation with retry.
    */
-  private async handleEvent(
+  private async handleCellEvent(
     event: 'add' | 'update' | 'delete',
     obj: k8s.KubernetesObject,
   ): Promise<void> {
     const cell = obj as unknown as CellResource;
     const cellId = `${cell.metadata.namespace}/${cell.metadata.name}`;
 
-    console.log(`[CellController] ${event} event for cell ${cellId}`);
+    console.log(`[CellController] cell ${event} event for ${cellId}`);
 
     if (event === 'delete') {
       // ownerReferences handle Pod cleanup automatically
@@ -126,6 +184,61 @@ export class CellController {
     console.error(
       `[CellController] exhausted retries for ${cellId}, will retry on next event`,
     );
+  }
+
+  /**
+   * Handle a Pod informer event. When a managed Pod is deleted or enters
+   * Failed/Unknown phase, look up the owning Cell CRD and reconcile it.
+   */
+  async handlePodEvent(
+    event: 'update' | 'delete',
+    obj: k8s.KubernetesObject,
+  ): Promise<void> {
+    const pod = obj as k8s.V1Pod;
+    const labels = pod.metadata?.labels ?? {};
+    const cellName = labels['kais.io/cell'];
+    const namespace = pod.metadata?.namespace ?? 'default';
+
+    if (!cellName) {
+      // Pod doesn't have the cell label — skip
+      return;
+    }
+
+    const podId = `${namespace}/${pod.metadata?.name ?? 'unknown'}`;
+
+    if (event === 'delete') {
+      console.log(`[CellController] pod ${podId} deleted, reconciling cell ${cellName}`);
+      await this.reconcileCellByName(cellName, namespace);
+      return;
+    }
+
+    // event === 'update': check if phase is Failed or Unknown
+    const phase = pod.status?.phase;
+    if (phase === 'Failed' || phase === 'Unknown') {
+      console.log(`[CellController] pod ${podId} entered ${phase} phase, reconciling cell ${cellName}`);
+      await this.reconcileCellByName(cellName, namespace);
+    }
+  }
+
+  /**
+   * Look up a Cell CRD by name and namespace, then reconcile it.
+   */
+  private async reconcileCellByName(name: string, namespace: string): Promise<void> {
+    try {
+      const cell = await this.client.getCell(name, namespace);
+      if (cell) {
+        await this.reconcileCell(cell);
+      } else {
+        console.log(
+          `[CellController] cell ${namespace}/${name} not found (may have been deleted)`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[CellController] failed to reconcile cell ${namespace}/${name} from pod event:`,
+        err,
+      );
+    }
   }
 
   /**

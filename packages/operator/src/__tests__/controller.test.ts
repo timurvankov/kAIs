@@ -22,12 +22,14 @@ interface StatusUpdateCall {
 
 function createMockClient(): KubeClient & {
   pods: Map<string, k8s.V1Pod>;
+  cells: Map<string, CellResource>;
   statusUpdates: StatusUpdateCall[];
   emittedEvents: EmitEventCall[];
   createPodCalls: k8s.V1Pod[];
   deletePodCalls: { name: string; namespace: string }[];
 } {
   const pods = new Map<string, k8s.V1Pod>();
+  const cells = new Map<string, CellResource>();
   const statusUpdates: StatusUpdateCall[] = [];
   const emittedEvents: EmitEventCall[] = [];
   const createPodCalls: k8s.V1Pod[] = [];
@@ -35,6 +37,7 @@ function createMockClient(): KubeClient & {
 
   return {
     pods,
+    cells,
     statusUpdates,
     emittedEvents,
     createPodCalls,
@@ -54,6 +57,20 @@ function createMockClient(): KubeClient & {
     async deletePod(name: string, namespace: string): Promise<void> {
       deletePodCalls.push({ name, namespace });
       pods.delete(`${namespace}/${name}`);
+    },
+
+    async listPods(_namespace: string, _labelSelector: string): Promise<k8s.V1PodList> {
+      const items: k8s.V1Pod[] = [];
+      for (const pod of pods.values()) {
+        if (pod.metadata?.labels?.['kais.io/role'] === 'cell') {
+          items.push(pod);
+        }
+      }
+      return { items } as k8s.V1PodList;
+    },
+
+    async getCell(name: string, namespace: string): Promise<CellResource | null> {
+      return cells.get(`${namespace}/${name}`) ?? null;
     },
 
     async updateCellStatus(
@@ -101,6 +118,10 @@ function makeRunningPod(cell: CellResource): k8s.V1Pod {
     metadata: {
       name: `cell-${cell.metadata.name}`,
       namespace: cell.metadata.namespace,
+      labels: {
+        'kais.io/cell': cell.metadata.name,
+        'kais.io/role': 'cell',
+      },
     },
     spec: {
       containers: [
@@ -370,5 +391,146 @@ describe('CellController.reconcileCell', () => {
     await expect(errorController.reconcileCell(cell)).rejects.toThrow(
       'API error',
     );
+  });
+});
+
+describe('CellController.handlePodEvent', () => {
+  let client: ReturnType<typeof createMockClient>;
+  let controller: CellController;
+
+  beforeEach(() => {
+    client = createMockClient();
+    controller = createController(client);
+  });
+
+  it('reconciles owning Cell when Pod is deleted', async () => {
+    const cell = makeCell();
+    client.cells.set(`${cell.metadata.namespace}/${cell.metadata.name}`, cell);
+
+    // Simulate a Pod delete event
+    const podObj = {
+      metadata: {
+        name: 'cell-researcher',
+        namespace: 'default',
+        labels: {
+          'kais.io/cell': 'researcher',
+          'kais.io/role': 'cell',
+        },
+      },
+    } as k8s.V1Pod;
+
+    await controller.handlePodEvent('delete', podObj);
+
+    // Should have tried to create a Pod (since no Pod exists)
+    expect(client.createPodCalls).toHaveLength(1);
+    expect(client.createPodCalls[0]!.metadata?.name).toBe('cell-researcher');
+  });
+
+  it('reconciles owning Cell when Pod enters Failed phase', async () => {
+    const cell = makeCell();
+    client.cells.set(`${cell.metadata.namespace}/${cell.metadata.name}`, cell);
+
+    // Add the failed Pod to the client
+    const pod: k8s.V1Pod = {
+      metadata: {
+        name: 'cell-researcher',
+        namespace: 'default',
+        labels: {
+          'kais.io/cell': 'researcher',
+          'kais.io/role': 'cell',
+        },
+      },
+      status: { phase: 'Failed' },
+    };
+    client.pods.set('default/cell-researcher', pod);
+
+    await controller.handlePodEvent('update', pod);
+
+    // Should delete the failed Pod (reconcileCell logic)
+    expect(client.deletePodCalls).toHaveLength(1);
+    expect(client.deletePodCalls[0]!.name).toBe('cell-researcher');
+  });
+
+  it('reconciles owning Cell when Pod enters Unknown phase', async () => {
+    const cell = makeCell();
+    client.cells.set(`${cell.metadata.namespace}/${cell.metadata.name}`, cell);
+
+    const pod: k8s.V1Pod = {
+      metadata: {
+        name: 'cell-researcher',
+        namespace: 'default',
+        labels: {
+          'kais.io/cell': 'researcher',
+          'kais.io/role': 'cell',
+        },
+      },
+      status: { phase: 'Unknown' },
+    };
+    client.pods.set('default/cell-researcher', pod);
+
+    await controller.handlePodEvent('update', pod);
+
+    // Should delete the Unknown Pod
+    expect(client.deletePodCalls).toHaveLength(1);
+  });
+
+  it('does not reconcile for Running Pod updates', async () => {
+    const cell = makeCell();
+    client.cells.set(`${cell.metadata.namespace}/${cell.metadata.name}`, cell);
+
+    const pod: k8s.V1Pod = {
+      metadata: {
+        name: 'cell-researcher',
+        namespace: 'default',
+        labels: {
+          'kais.io/cell': 'researcher',
+          'kais.io/role': 'cell',
+        },
+      },
+      status: { phase: 'Running' },
+    };
+
+    await controller.handlePodEvent('update', pod);
+
+    // Should NOT trigger reconciliation for healthy pods
+    expect(client.createPodCalls).toHaveLength(0);
+    expect(client.deletePodCalls).toHaveLength(0);
+    expect(client.statusUpdates).toHaveLength(0);
+  });
+
+  it('ignores Pods without kais.io/cell label', async () => {
+    const pod: k8s.V1Pod = {
+      metadata: {
+        name: 'some-other-pod',
+        namespace: 'default',
+        labels: {},
+      },
+      status: { phase: 'Failed' },
+    };
+
+    await controller.handlePodEvent('update', pod);
+
+    // Should not do anything
+    expect(client.createPodCalls).toHaveLength(0);
+    expect(client.deletePodCalls).toHaveLength(0);
+  });
+
+  it('handles missing Cell gracefully on Pod delete', async () => {
+    // Cell does not exist in the client
+    const pod: k8s.V1Pod = {
+      metadata: {
+        name: 'cell-ghost',
+        namespace: 'default',
+        labels: {
+          'kais.io/cell': 'ghost',
+          'kais.io/role': 'cell',
+        },
+      },
+    };
+
+    // Should not throw
+    await controller.handlePodEvent('delete', pod);
+
+    expect(client.createPodCalls).toHaveLength(0);
   });
 });

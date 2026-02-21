@@ -248,6 +248,12 @@ describe('API Server', () => {
       // Verify query params
       expect(db.queries[0]!.params).toEqual(['researcher', 'prod']);
 
+      // Verify the SQL queries the correct nested JSON path and filters by event_type
+      const sql = db.queries[0]!.text;
+      expect(sql).toContain("payload->'usage'->>'cost'");
+      expect(sql).toContain("payload->'usage'->>'totalTokens'");
+      expect(sql).toContain("event_type = 'response'");
+
       await app.close();
     });
 
