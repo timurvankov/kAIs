@@ -46,7 +46,11 @@ jobs:
         image: nats:latest
         ports:
           - 4222:4222
-        options: --jetstream
+        options: >-
+          --health-cmd "true"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 3
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
