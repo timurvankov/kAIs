@@ -1,8 +1,12 @@
 import * as k8s from '@kubernetes/client-node';
+import { getTracer } from '@kais/core';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 import { buildCellPod } from './pod-builder.js';
 import { specChanged } from './spec-changed.js';
 import type { CellResource, KubeClient } from './types.js';
+
+const tracer = getTracer('kais-operator');
 
 /** Extract HTTP status code from @kubernetes/client-node errors. */
 function httpStatus(err: unknown): number | undefined {
@@ -258,74 +262,92 @@ export class CellController {
    * Reconcile a single Cell — ensure its Pod exists and is healthy.
    */
   async reconcileCell(cell: CellResource): Promise<void> {
-    const podName = `cell-${cell.metadata.name}`;
-    const pod = await this.client.getPod(podName, cell.metadata.namespace);
+    const span = tracer.startSpan('operator.reconcile_cell', {
+      attributes: {
+        'resource.name': cell.metadata.name,
+        'resource.namespace': cell.metadata.namespace ?? 'default',
+        'resource.phase': cell.status?.phase ?? 'Unknown',
+      },
+    });
+    try {
+      const podName = `cell-${cell.metadata.name}`;
+      const pod = await this.client.getPod(podName, cell.metadata.namespace);
 
-    if (!pod) {
-      // No Pod exists — create one
-      const newPod = buildCellPod(cell);
-      try {
-        await this.client.createPod(newPod);
-      } catch (err: unknown) {
-        if (httpStatus(err) === 409) {
-          // Pod already exists (race condition) — proceed to sync status
-          console.log(`[CellController] pod ${podName} already exists, skipping create`);
-        } else {
-          throw err;
+      if (!pod) {
+        // No Pod exists — create one
+        const newPod = buildCellPod(cell);
+        try {
+          await this.client.createPod(newPod);
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409) {
+            // Pod already exists (race condition) — proceed to sync status
+            console.log(`[CellController] pod ${podName} already exists, skipping create`);
+          } else {
+            throw err;
+          }
         }
+        await this.client.updateCellStatus(
+          cell.metadata.name,
+          cell.metadata.namespace,
+          { phase: 'Pending', podName },
+        );
+        await this.client.emitEvent(
+          cell,
+          'CellCreated',
+          'PodCreated',
+          `Created Pod ${podName} for Cell ${cell.metadata.name}`,
+        );
+        span.setStatus({ code: SpanStatusCode.OK });
+        return;
       }
-      await this.client.updateCellStatus(
-        cell.metadata.name,
-        cell.metadata.namespace,
-        { phase: 'Pending', podName },
-      );
-      await this.client.emitEvent(
-        cell,
-        'CellCreated',
-        'PodCreated',
-        `Created Pod ${podName} for Cell ${cell.metadata.name}`,
-      );
-      return;
+
+      // Pod exists — check its health
+      const podPhase = pod.status?.phase;
+
+      if (podPhase === 'Failed' || podPhase === 'Unknown') {
+        // Pod crashed — delete it, next reconcile will recreate
+        await this.client.deletePod(podName, cell.metadata.namespace);
+        await this.client.updateCellStatus(
+          cell.metadata.name,
+          cell.metadata.namespace,
+          {
+            phase: 'Failed',
+            podName,
+            message: `Pod ${podName} entered ${podPhase} phase, restarting`,
+          },
+        );
+        await this.client.emitEvent(
+          cell,
+          'CellFailed',
+          'PodFailed',
+          `Pod ${podName} entered ${podPhase} phase, deleted for recreation`,
+        );
+        span.setStatus({ code: SpanStatusCode.OK });
+        return;
+      }
+
+      if (specChanged(cell, pod)) {
+        // Spec updated — rolling restart
+        await this.client.deletePod(podName, cell.metadata.namespace);
+        await this.client.emitEvent(
+          cell,
+          'CellCreated',
+          'SpecChanged',
+          `Cell spec changed, restarting Pod ${podName}`,
+        );
+        span.setStatus({ code: SpanStatusCode.OK });
+        return;
+      }
+
+      // Running and healthy — sync status
+      await this.syncCellStatus(cell, pod);
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+      throw err;
+    } finally {
+      span.end();
     }
-
-    // Pod exists — check its health
-    const podPhase = pod.status?.phase;
-
-    if (podPhase === 'Failed' || podPhase === 'Unknown') {
-      // Pod crashed — delete it, next reconcile will recreate
-      await this.client.deletePod(podName, cell.metadata.namespace);
-      await this.client.updateCellStatus(
-        cell.metadata.name,
-        cell.metadata.namespace,
-        {
-          phase: 'Failed',
-          podName,
-          message: `Pod ${podName} entered ${podPhase} phase, restarting`,
-        },
-      );
-      await this.client.emitEvent(
-        cell,
-        'CellFailed',
-        'PodFailed',
-        `Pod ${podName} entered ${podPhase} phase, deleted for recreation`,
-      );
-      return;
-    }
-
-    if (specChanged(cell, pod)) {
-      // Spec updated — rolling restart
-      await this.client.deletePod(podName, cell.metadata.namespace);
-      await this.client.emitEvent(
-        cell,
-        'CellCreated',
-        'SpecChanged',
-        `Cell spec changed, restarting Pod ${podName}`,
-      );
-      return;
-    }
-
-    // Running and healthy — sync status
-    await this.syncCellStatus(cell, pod);
   }
 
   /**

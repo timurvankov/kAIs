@@ -1,7 +1,11 @@
 import type { CompletionCheck } from '@kais/core';
+import { getTracer } from '@kais/core';
+import { SpanStatusCode } from '@opentelemetry/api';
 import * as path from 'node:path';
 
 import type { CommandExecutor, FileSystem, NatsClient } from './types.js';
+
+const tracer = getTracer('kais-operator');
 
 /**
  * Result of running a single completion check.
@@ -59,6 +63,7 @@ function compare(actual: number, operator: string, expected: number): boolean {
  * @param executor - Command executor abstraction
  * @param fs - Filesystem abstraction
  * @param nats - Optional NATS client for natsResponse checks
+ * @param since - Optional ISO timestamp to filter NATS messages (only messages after this time)
  */
 export async function runCheck(
   check: CompletionCheck,
@@ -66,30 +71,50 @@ export async function runCheck(
   executor: CommandExecutor,
   fs: FileSystem,
   nats?: NatsClient,
+  since?: string,
 ): Promise<CheckResult> {
+  const span = tracer.startSpan('operator.run_checks', {
+    attributes: {
+      'resource.name': check.name,
+    },
+  });
   try {
-    switch (check.type) {
-      case 'fileExists':
-        return await runFileExistsCheck(check, workspacePath, fs);
-      case 'command':
-        return await runCommandCheck(check, workspacePath, executor);
-      case 'coverage':
-        return await runCoverageCheck(check, workspacePath, executor);
-      case 'natsResponse':
-        return await runNatsResponseCheck(check, nats);
-      default:
-        return {
-          name: check.name,
-          status: 'Error',
-          output: `Unknown check type: "${check.type as string}"`,
-        };
+    let result: CheckResult;
+    try {
+      switch (check.type) {
+        case 'fileExists':
+          result = await runFileExistsCheck(check, workspacePath, fs);
+          break;
+        case 'command':
+          result = await runCommandCheck(check, workspacePath, executor);
+          break;
+        case 'coverage':
+          result = await runCoverageCheck(check, workspacePath, executor);
+          break;
+        case 'natsResponse':
+          result = await runNatsResponseCheck(check, nats, since);
+          break;
+        default:
+          result = {
+            name: check.name,
+            status: 'Error',
+            output: `Unknown check type: "${check.type as string}"`,
+          };
+      }
+    } catch (err) {
+      result = {
+        name: check.name,
+        status: 'Error',
+        output: `Check threw an exception: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
+    span.setStatus({ code: SpanStatusCode.OK });
+    return result;
   } catch (err) {
-    return {
-      name: check.name,
-      status: 'Error',
-      output: `Check threw an exception: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+    throw err;
+  } finally {
+    span.end();
   }
 }
 
@@ -258,6 +283,7 @@ async function runCoverageCheck(
 async function runNatsResponseCheck(
   check: CompletionCheck,
   nats?: NatsClient,
+  since?: string,
 ): Promise<CheckResult> {
   if (!nats) {
     return {
@@ -276,7 +302,7 @@ async function runNatsResponseCheck(
   }
 
   const timeoutMs = (check.timeoutSeconds ?? 30) * 1000;
-  const messages = await nats.waitForMessage(check.subject, timeoutMs);
+  const messages = await nats.waitForMessage(check.subject, timeoutMs, since);
 
   if (messages.length === 0) {
     return {

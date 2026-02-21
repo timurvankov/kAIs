@@ -104,6 +104,10 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
             { name: 'NATS_URL', value: NATS_URL },
             { name: 'POSTGRES_URL', value: POSTGRES_URL },
             { name: 'OLLAMA_URL', value: OLLAMA_URL },
+            {
+              name: 'OTEL_EXPORTER_OTLP_ENDPOINT',
+              value: 'http://otel-collector-opentelemetry-collector.kais-system:4317',
+            },
           ],
           envFrom: [{ secretRef: { name: 'llm-credentials', optional: true } }],
           resources: {

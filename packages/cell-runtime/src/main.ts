@@ -2,7 +2,7 @@
  * Entrypoint for the kAIs Cell Pod.
  * Reads env vars and starts CellRuntime.
  */
-import { connect } from 'nats';
+import { connect, AckPolicy, DeliverPolicy } from 'nats';
 
 import { CellRuntime } from './cell-runtime.js';
 import type { NatsConnection } from './cell-runtime.js';
@@ -12,6 +12,7 @@ import { createWriteFileTool } from './tools/write-file.js';
 import { createBashTool } from './tools/bash.js';
 import type { Tool } from './tools/tool-executor.js';
 import type { CellSpec } from '@kais/core';
+import { initTelemetry, shutdownTelemetry } from '@kais/core';
 import { createTopologyEnforcer } from './topology/topology-enforcer.js';
 
 const CELL_NAME = process.env['CELL_NAME'] ?? '';
@@ -27,8 +28,14 @@ if (!CELL_NAME || !CELL_SPEC_JSON) {
 const spec: CellSpec = JSON.parse(CELL_SPEC_JSON);
 
 async function main() {
+  // Initialise OpenTelemetry (no-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset)
+  initTelemetry({ serviceName: 'kais-cell' });
+
   // Connect to NATS
   const nc = await connect({ servers: NATS_URL });
+  const js = nc.jetstream();
+  const jsm = await nc.jetstreamManager();
+
   const nats: NatsConnection = {
     publish(subject: string, data: Uint8Array) {
       nc.publish(subject, data);
@@ -43,6 +50,47 @@ async function main() {
       return {
         unsubscribe() {
           sub.unsubscribe();
+        },
+      };
+    },
+    subscribeJetStream(
+      stream: string,
+      subject: string,
+      consumerName: string,
+      callback: (msg: { data: Uint8Array; subject: string; ack: () => void }) => Promise<void>,
+    ) {
+      let stopped = false;
+      (async () => {
+        // Create or update a durable consumer for this cell
+        // ack_wait must exceed the longest LLM call (up to 10 min on CPU)
+        await jsm.consumers.add(stream, {
+          durable_name: consumerName,
+          filter_subject: subject,
+          ack_policy: AckPolicy.Explicit,
+          deliver_policy: DeliverPolicy.All,
+          ack_wait: 600_000_000_000, // 10 minutes in nanoseconds
+        });
+        // Get the durable consumer by name
+        const consumer = await js.consumers.get(stream, consumerName);
+        while (!stopped) {
+          try {
+            const msg = await consumer.next({ expires: 5_000 });
+            if (msg) {
+              await callback({
+                data: msg.data,
+                subject: msg.subject,
+                ack: () => msg.ack(),
+              });
+            }
+          } catch {
+            // Timeout or transient error — retry
+            if (!stopped) await new Promise(r => setTimeout(r, 1_000));
+          }
+        }
+      })();
+      return {
+        unsubscribe() {
+          stopped = true;
         },
       };
     },
@@ -157,6 +205,7 @@ async function main() {
   // Graceful shutdown
   const shutdown = async () => {
     await runtime.stop();
+    await shutdownTelemetry();
     process.exit(0);
   };
   process.on('SIGTERM', () => void shutdown());

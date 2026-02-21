@@ -1,11 +1,15 @@
 import type * as k8s from '@kubernetes/client-node';
 import * as k8sLib from '@kubernetes/client-node';
 import type { CellSpec, FormationStatus } from '@kais/core';
+import { getTracer } from '@kais/core';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 import { generateTopologyConfigMap } from './topology.js';
 import { deepEqual } from './spec-changed.js';
 import { buildWorkspacePVC } from './workspace.js';
 import type { CellResource, FormationResource, KubeClient } from './types.js';
+
+const tracer = getTracer('kais-operator');
 
 function httpStatus(err: unknown): number | undefined {
   const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
@@ -171,6 +175,13 @@ export class FormationController {
    * Reconcile a Formation — ensure its Cells, topology ConfigMap, and workspace PVC exist.
    */
   async reconcileFormation(formation: FormationResource): Promise<void> {
+    const span = tracer.startSpan('operator.reconcile_formation', {
+      attributes: {
+        'resource.name': formation.metadata.name,
+        'resource.namespace': formation.metadata.namespace ?? 'default',
+      },
+    });
+    try {
     const { namespace } = formation.metadata;
 
     // 1. Ensure workspace PVC exists
@@ -317,6 +328,13 @@ export class FormationController {
         cells: cellStatuses,
       },
     );
+    span.setStatus({ code: SpanStatusCode.OK });
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+      throw err;
+    } finally {
+      span.end();
+    }
   }
 
   /**

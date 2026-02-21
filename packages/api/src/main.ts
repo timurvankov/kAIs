@@ -10,6 +10,7 @@
 import { connect } from 'nats';
 import pg from 'pg';
 
+import { initTelemetry, shutdownTelemetry } from '@kais/core';
 import { buildServer } from './server.js';
 import { EventConsumer } from './event-consumer.js';
 import type { DbClient, NatsClient } from './clients.js';
@@ -19,6 +20,8 @@ const POSTGRES_URL = process.env['POSTGRES_URL'] ?? 'postgres://localhost:5432/k
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 
 async function main(): Promise<void> {
+  initTelemetry({ serviceName: 'kais-api' });
+
   // Connect to NATS
   const nc = await connect({ servers: NATS_URL });
   const nats: NatsClient = {
@@ -69,6 +72,7 @@ async function main(): Promise<void> {
     await app.close();
     await nc.drain();
     await pool.end();
+    await shutdownTelemetry();
   };
   process.on('SIGTERM', () => void shutdown());
   process.on('SIGINT', () => void shutdown());

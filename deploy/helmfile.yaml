@@ -3,6 +3,14 @@ repositories:
     url: https://charts.bitnami.com/bitnami
   - name: nats
     url: https://nats-io.github.io/k8s/helm/charts
+  - name: open-telemetry
+    url: https://open-telemetry.github.io/opentelemetry-helm-charts
+  - name: jaegertracing
+    url: https://jaegertracing.github.io/helm-charts
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
 
 releases:
   - name: postgres
@@ -85,3 +93,105 @@ releases:
     namespace: kais-system
     chart: ./helm/kais-infra/charts/ollama
     condition: ollama.enabled
+
+  - name: otel-collector
+    namespace: kais-system
+    chart: open-telemetry/opentelemetry-collector
+    condition: observability.enabled
+    values:
+      - mode: deployment
+        config:
+          receivers:
+            otlp:
+              protocols:
+                grpc: { endpoint: 0.0.0.0:4317 }
+                http: { endpoint: 0.0.0.0:4318 }
+          processors:
+            batch:
+              timeout: 5s
+              send_batch_size: 1024
+          exporters:
+            otlp/jaeger:
+              endpoint: jaeger-collector.kais-system:4317
+              tls: { insecure: true }
+            prometheus:
+              endpoint: 0.0.0.0:8889
+          service:
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [otlp/jaeger]
+              metrics:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [prometheus]
+
+  - name: jaeger
+    namespace: kais-system
+    chart: jaegertracing/jaeger
+    condition: observability.enabled
+    values:
+      - collector:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        query:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        storage:
+          type: badger
+
+  - name: prometheus
+    namespace: kais-system
+    chart: prometheus-community/prometheus
+    condition: observability.enabled
+    values:
+      - server:
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+          retention: 15d
+          persistentVolume:
+            size: 5Gi
+        serverFiles:
+          prometheus.yml:
+            scrape_configs:
+              - job_name: otel-collector
+                static_configs:
+                  - targets: ['otel-collector-opentelemetry-collector.kais-system:8889']
+              - job_name: kais-operator
+                static_configs:
+                  - targets: ['kais-operator.kais-system:9090']
+
+  - name: grafana
+    namespace: kais-system
+    chart: grafana/grafana
+    condition: observability.enabled
+    values:
+      - adminPassword: kais
+        resources:
+          requests: { memory: 128Mi, cpu: 100m }
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server.kais-system
+                isDefault: true
+              - name: Jaeger
+                type: jaeger
+                url: http://jaeger-query.kais-system:16686
+        dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: kais
+                orgId: 1
+                folder: kAIs
+                type: file
+                disableDeletion: false
+                editable: true
+                options:
+                  path: /var/lib/grafana/dashboards/kais
+        dashboardsConfigMaps:
+          kais: kais-grafana-dashboards

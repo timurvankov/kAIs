@@ -9,6 +9,18 @@ export {
   CompletionCheckTypeSchema,
   EnvelopeSchema,
   EnvelopeTypeSchema,
+  ExperimentBudgetSchema,
+  ExperimentLLMJudgeSchema,
+  ExperimentMetricSchema,
+  ExperimentMetricTypeSchema,
+  ExperimentMissionSchema,
+  ExperimentPhaseSchema,
+  ExperimentRunSchema,
+  ExperimentRunStatusSchema,
+  ExperimentRuntimeSchema,
+  ExperimentSpecSchema,
+  ExperimentStatusSchema,
+  ExperimentVariableSchema,
   FormationBudgetSchema,
   FormationCellStatusSchema,
   FormationPhaseSchema,
@@ -50,6 +62,18 @@ export type {
   CompletionCheckType,
   Envelope,
   EnvelopeType,
+  ExperimentBudget,
+  ExperimentLLMJudge,
+  ExperimentMetric,
+  ExperimentMetricType,
+  ExperimentMission,
+  ExperimentPhase,
+  ExperimentRun,
+  ExperimentRunStatus,
+  ExperimentRuntime,
+  ExperimentSpec,
+  ExperimentStatus,
+  ExperimentVariable,
   FormationBudget,
   FormationCellStatus,
   FormationPhase,
@@ -95,6 +119,51 @@ export { withRetry } from './retry.js';
 
 // Envelope helper
 export { createEnvelope } from './envelope.js';
+
+// Telemetry
+export { initTelemetry, shutdownTelemetry, getTracer, getMeter } from './telemetry.js';
+export type { Tracer, Meter } from '@opentelemetry/api';
+
+// Logger
+export { logger, createLogger } from './logger.js';
+export type { Logger } from 'pino';
+
+// Experiment analysis
+export { analyzeExperiment } from './analysis.js';
+export type {
+  ExperimentAnalysis,
+  MetricAnalysis,
+  VariantStats,
+  PairwiseComparison,
+  ParetoPoint,
+  RunDataPoint,
+} from './analysis.js';
+
+// In-Process Runtime
+export { InMemoryBus, InProcessRuntime } from './runtime.js';
+export type {
+  CellRuntime,
+  RunningCell,
+  MessageBus,
+  MessageHandler,
+  Subscription,
+} from './runtime.js';
+
+// Protocol system
+export {
+  ProtocolSession,
+  ProtocolEnforcer,
+  CONTRACT_PROTOCOL,
+  DELIBERATION_PROTOCOL,
+  AUCTION_PROTOCOL,
+} from './protocol.js';
+export type {
+  Protocol,
+  ProtocolState,
+  ProtocolTransition,
+  ProtocolAction,
+  ValidationResult,
+} from './protocol.js';
 
 // RBAC schemas
 export {

@@ -10,6 +10,18 @@ import type {
   CompletionCheckTypeSchema,
   EnvelopeSchema,
   EnvelopeTypeSchema,
+  ExperimentBudgetSchema,
+  ExperimentLLMJudgeSchema,
+  ExperimentMetricSchema,
+  ExperimentMetricTypeSchema,
+  ExperimentMissionSchema,
+  ExperimentPhaseSchema,
+  ExperimentRunSchema,
+  ExperimentRunStatusSchema,
+  ExperimentRuntimeSchema,
+  ExperimentSpecSchema,
+  ExperimentStatusSchema,
+  ExperimentVariableSchema,
   FormationBudgetSchema,
   FormationCellStatusSchema,
   FormationPhaseSchema,
@@ -81,3 +93,17 @@ export type MissionCheckResult = z.infer<typeof MissionCheckResultSchema>;
 export type MissionReviewStatus = z.infer<typeof MissionReviewStatusSchema>;
 export type MissionHistoryEntry = z.infer<typeof MissionHistoryEntrySchema>;
 export type MissionStatus = z.infer<typeof MissionStatusSchema>;
+
+// Experiment types
+export type ExperimentVariable = z.infer<typeof ExperimentVariableSchema>;
+export type ExperimentMetricType = z.infer<typeof ExperimentMetricTypeSchema>;
+export type ExperimentLLMJudge = z.infer<typeof ExperimentLLMJudgeSchema>;
+export type ExperimentMetric = z.infer<typeof ExperimentMetricSchema>;
+export type ExperimentRuntime = z.infer<typeof ExperimentRuntimeSchema>;
+export type ExperimentBudget = z.infer<typeof ExperimentBudgetSchema>;
+export type ExperimentMission = z.infer<typeof ExperimentMissionSchema>;
+export type ExperimentSpec = z.infer<typeof ExperimentSpecSchema>;
+export type ExperimentPhase = z.infer<typeof ExperimentPhaseSchema>;
+export type ExperimentRunStatus = z.infer<typeof ExperimentRunStatusSchema>;
+export type ExperimentRun = z.infer<typeof ExperimentRunSchema>;
+export type ExperimentStatus = z.infer<typeof ExperimentStatusSchema>;

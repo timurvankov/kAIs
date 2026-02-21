@@ -10,6 +10,7 @@ import {
   listCustomResources,
   customApi,
   dumpOperatorLogs,
+  httpStatus,
 } from './helpers.js';
 
 const CELL_SPEC = {
@@ -27,6 +28,45 @@ const CELL_SPEC = {
     cpuLimit: '250m',
   },
 };
+
+/** Replace formation spec with retry on 409 Conflict. */
+async function updateFormationSpec(
+  name: string,
+  updateFn: (spec: { cells: Array<{ name: string; replicas: number; spec: unknown }>; topology: unknown }) => void,
+): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const current = await getCustomResource('formations', name);
+    if (!current) throw new Error(`Formation ${name} not found`);
+    const spec = (current as Record<string, unknown>).spec as {
+      cells: Array<{ name: string; replicas: number; spec: unknown }>;
+      topology: unknown;
+    };
+    updateFn(spec);
+    try {
+      await customApi.replaceNamespacedCustomObject({
+        group: 'kais.io',
+        version: 'v1',
+        namespace: 'default',
+        plural: 'formations',
+        name,
+        body: {
+          apiVersion: 'kais.io/v1',
+          kind: 'Formation',
+          metadata: (current as Record<string, unknown>).metadata,
+          spec,
+        },
+      });
+      return;
+    } catch (err: unknown) {
+      if (httpStatus(err) === 409 && attempt < 4) {
+        console.log(`[test] 409 Conflict on attempt ${attempt + 1}, retrying...`);
+        await new Promise((r) => setTimeout(r, 500));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 describe('Formation Scaling', () => {
   afterEach(async () => {
@@ -67,25 +107,8 @@ describe('Formation Scaling', () => {
     );
 
     console.log('[test] Scaling from 1 to 3 replicas...');
-    const currentFormation = await getCustomResource('formations', 'e2e-scale-formation');
-    const spec = (currentFormation as Record<string, unknown>).spec as {
-      cells: Array<{ name: string; replicas: number; spec: unknown }>;
-      topology: unknown;
-    };
-    spec.cells[0].replicas = 3;
-
-    await customApi.replaceNamespacedCustomObject({
-      group: 'kais.io',
-      version: 'v1',
-      namespace: 'default',
-      plural: 'formations',
-      name: 'e2e-scale-formation',
-      body: {
-        apiVersion: 'kais.io/v1',
-        kind: 'Formation',
-        metadata: (currentFormation as Record<string, unknown>).metadata,
-        spec,
-      },
+    await updateFormationSpec('e2e-scale-formation', (spec) => {
+      spec.cells[0].replicas = 3;
     });
 
     await waitFor(
@@ -137,25 +160,8 @@ describe('Formation Scaling', () => {
     );
 
     console.log('[test] Scaling from 3 to 1 replica...');
-    const currentFormation = await getCustomResource('formations', 'e2e-scale-formation');
-    const spec = (currentFormation as Record<string, unknown>).spec as {
-      cells: Array<{ name: string; replicas: number; spec: unknown }>;
-      topology: unknown;
-    };
-    spec.cells[0].replicas = 1;
-
-    await customApi.replaceNamespacedCustomObject({
-      group: 'kais.io',
-      version: 'v1',
-      namespace: 'default',
-      plural: 'formations',
-      name: 'e2e-scale-formation',
-      body: {
-        apiVersion: 'kais.io/v1',
-        kind: 'Formation',
-        metadata: (currentFormation as Record<string, unknown>).metadata,
-        spec,
-      },
+    await updateFormationSpec('e2e-scale-formation', (spec) => {
+      spec.cells[0].replicas = 1;
     });
 
     await waitFor(

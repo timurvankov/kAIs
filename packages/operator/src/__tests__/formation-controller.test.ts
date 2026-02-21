@@ -194,6 +194,8 @@ function createMockClient(): KubeClient & {
     // Stub methods required by KubeClient interface but not used by FormationController
     async updateMissionStatus(): Promise<void> {},
     async emitMissionEvent(): Promise<void> {},
+    async updateExperimentStatus(): Promise<void> {},
+    async emitExperimentEvent(): Promise<void> {},
   };
 }
 

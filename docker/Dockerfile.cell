@@ -15,6 +15,7 @@ COPY packages/cell-runtime/ packages/cell-runtime/
 RUN pnpm --filter @kais/core build && pnpm --filter @kais/mind build && pnpm --filter @kais/cell-runtime build
 
 FROM base AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/packages/core/dist packages/core/dist

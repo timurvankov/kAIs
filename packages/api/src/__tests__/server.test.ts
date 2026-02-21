@@ -298,6 +298,86 @@ describe('API Server', () => {
     });
   });
 
+  // ----- GET /api/v1/metrics -----
+
+  describe('GET /api/v1/metrics', () => {
+    it('returns aggregated platform metrics', async () => {
+      db = createMockDb([
+        { rows: [{ count: '5' }] },
+        { rows: [{ llm_calls: '120', total_cost: '3.456', total_tokens: '50000' }] },
+      ]);
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/metrics',
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.activeCells).toBe(5);
+      expect(body.totalCostToday).toBeCloseTo(3.456);
+      expect(body.totalTokensToday).toBe(50000);
+      expect(body.llmCallsToday).toBe(120);
+
+      // Verify two queries were made
+      expect(db.queries).toHaveLength(2);
+
+      // First query: active cells in last hour
+      expect(db.queries[0]!.text).toContain('COUNT(DISTINCT cell_name)');
+      expect(db.queries[0]!.text).toContain("NOW() - INTERVAL '1 hour'");
+
+      // Second query: today's response metrics
+      expect(db.queries[1]!.text).toContain("event_type = 'response'");
+      expect(db.queries[1]!.text).toContain('CURRENT_DATE');
+      expect(db.queries[1]!.text).toContain("payload->'usage'->>'cost'");
+      expect(db.queries[1]!.text).toContain("payload->'usage'->>'totalTokens'");
+
+      await app.close();
+    });
+
+    it('returns zeros when no data exists', async () => {
+      db = createMockDb([
+        { rows: [{ count: '0' }] },
+        { rows: [{ llm_calls: '0', total_cost: '0', total_tokens: '0' }] },
+      ]);
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/metrics',
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.activeCells).toBe(0);
+      expect(body.totalCostToday).toBe(0);
+      expect(body.totalTokensToday).toBe(0);
+      expect(body.llmCallsToday).toBe(0);
+
+      await app.close();
+    });
+
+    it('handles empty query results gracefully', async () => {
+      db = createMockDb([{ rows: [] }, { rows: [] }]);
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/metrics',
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.activeCells).toBe(0);
+      expect(body.totalCostToday).toBe(0);
+      expect(body.totalTokensToday).toBe(0);
+      expect(body.llmCallsToday).toBe(0);
+
+      await app.close();
+    });
+  });
+
   // ----- Error handling -----
 
   describe('Error handling', () => {

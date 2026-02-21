@@ -102,6 +102,8 @@ function createMockClient(): KubeClient & {
     async emitFormationEvent(): Promise<void> {},
     async updateMissionStatus(): Promise<void> {},
     async emitMissionEvent(): Promise<void> {},
+    async updateExperimentStatus(): Promise<void> {},
+    async emitExperimentEvent(): Promise<void> {},
   };
 }
 
