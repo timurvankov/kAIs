@@ -259,5 +259,35 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     });
   });
 
+  // ---------- Knowledge proxy routes ----------
+  const KNOWLEDGE_URL = process.env['KNOWLEDGE_SERVICE_URL'] ?? 'http://kais-knowledge.kais-system:8000';
+
+  app.post('/api/v1/knowledge/search', async (req, reply) => {
+    const res = await fetch(`${KNOWLEDGE_URL}/recall`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    reply.status(res.status).send(await res.json());
+  });
+
+  app.post('/api/v1/knowledge/add', async (req, reply) => {
+    const res = await fetch(`${KNOWLEDGE_URL}/remember`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    reply.status(res.status).send(await res.json());
+  });
+
+  app.post('/api/v1/knowledge/invalidate', async (req, reply) => {
+    const res = await fetch(`${KNOWLEDGE_URL}/correct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    reply.status(res.status).send(await res.json());
+  });
+
   return app;
 }
