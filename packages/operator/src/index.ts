@@ -1,4 +1,5 @@
 // Controllers
+export { BlueprintController } from './blueprint-controller.js';
 export { CellController } from './controller.js';
 export { ExperimentController } from './experiment-controller.js';
 export { FormationController } from './formation-controller.js';
@@ -28,6 +29,8 @@ export { parseTimeout } from './timeout.js';
 
 // Types
 export type {
+  BlueprintEventType,
+  BlueprintResource,
   CellResource,
   CellEventType,
   CommandExecutor,

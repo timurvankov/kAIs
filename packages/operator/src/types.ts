@@ -1,4 +1,6 @@
 import type {
+  BlueprintSpec,
+  BlueprintStatus,
   CellSpec,
   CellStatus,
   ExperimentSpec,
@@ -121,6 +123,31 @@ export type ExperimentEventType =
   | 'ExperimentOverBudget';
 
 /**
+ * Kubernetes custom resource representing a Blueprint.
+ * Matches the Blueprint CRD defined in crds/blueprint-crd.yaml.
+ */
+export interface BlueprintResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Blueprint';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: BlueprintSpec;
+  status?: BlueprintStatus;
+}
+
+/**
+ * Event types emitted by the BlueprintController.
+ */
+export type BlueprintEventType =
+  | 'BlueprintCreated'
+  | 'BlueprintUpdated'
+  | 'BlueprintVersioned';
+
+/**
  * Abstraction over the K8s API calls used by CellController and FormationController.
  * Makes the controllers testable by allowing mocks.
  */
@@ -238,6 +265,23 @@ export interface KubeClient {
   emitExperimentEvent(
     experiment: ExperimentResource,
     eventType: ExperimentEventType,
+    reason: string,
+    message: string,
+  ): Promise<void>;
+
+  // --- Blueprint management ---
+
+  /** Update the status subresource of a Blueprint CRD. */
+  updateBlueprintStatus(
+    name: string,
+    namespace: string,
+    status: BlueprintStatus,
+  ): Promise<void>;
+
+  /** Create a K8s Event for a Blueprint. */
+  emitBlueprintEvent(
+    blueprint: BlueprintResource,
+    eventType: BlueprintEventType,
     reason: string,
     message: string,
   ): Promise<void>;
