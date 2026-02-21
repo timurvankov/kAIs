@@ -29,6 +29,12 @@ importers:
       fastify:
         specifier: ^5.2.0
         version: 5.7.4
+      nats:
+        specifier: ^2.28.0
+        version: 2.29.3
+      pg:
+        specifier: ^8.13.0
+        version: 8.18.0
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -36,12 +42,6 @@ importers:
       '@types/pg':
         specifier: ^8.11.0
         version: 8.16.0
-      nats:
-        specifier: ^2.28.0
-        version: 2.29.3
-      pg:
-        specifier: ^8.13.0
-        version: 8.18.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -149,6 +149,57 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/node@22.19.11)
+
+  tests/e2e:
+    dependencies:
+      '@kubernetes/client-node':
+        specifier: ^1.0.0
+        version: 1.4.0
+      nats:
+        specifier: ^2.28.0
+        version: 2.29.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.11
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@22.19.11)
+
+  tests/integration:
+    dependencies:
+      '@kais/api':
+        specifier: workspace:*
+        version: link:../../packages/api
+      '@kais/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      nats:
+        specifier: ^2.28.0
+        version: 2.29.3
+      pg:
+        specifier: ^8.13.0
+        version: 8.18.0
+    devDependencies:
+      '@types/pg':
+        specifier: ^8.11.0
+        version: 8.16.0
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@24.10.13)
+
+  tests/llm-smoke:
+    dependencies:
+      '@kais/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@kais/mind':
+        specifier: workspace:*
+        version: link:../../packages/mind
+    devDependencies:
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/node@24.10.13)
 
 packages:
 
