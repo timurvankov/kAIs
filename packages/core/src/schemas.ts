@@ -88,6 +88,7 @@ export const EnvelopeSchema = z.object({
   timestamp: z.string().datetime(),
   traceId: z.string().optional(),
   replyTo: z.string().optional(),
+  traceContext: z.record(z.string(), z.string()).optional(),
 });
 
 // --- RetryStrategy ---

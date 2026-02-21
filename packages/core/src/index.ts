@@ -95,3 +95,11 @@ export { withRetry } from './retry.js';
 
 // Envelope helper
 export { createEnvelope } from './envelope.js';
+
+// Telemetry
+export { initTelemetry, shutdownTelemetry, getTracer, getMeter } from './telemetry.js';
+export type { Tracer, Meter } from '@opentelemetry/api';
+
+// Logger
+export { logger, createLogger } from './logger.js';
+export type { Logger } from 'pino';
