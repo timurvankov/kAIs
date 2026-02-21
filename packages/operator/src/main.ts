@@ -29,8 +29,8 @@ const CRD_VERSION = 'v1';
 // ---------------------------------------------------------------------------
 
 function httpStatus(err: unknown): number | undefined {
-  const e = err as { statusCode?: number; response?: { statusCode?: number } };
-  return e.statusCode ?? e.response?.statusCode;
+  const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
+  return e.code ?? e.statusCode ?? e.response?.statusCode;
 }
 
 // ---------------------------------------------------------------------------
