@@ -146,6 +146,27 @@ kais topology research-team
 kais scale research-team worker 5
 ```
 
+## More Examples
+
+The `examples/` directory contains ready-to-use YAML manifests:
+
+| Example | Description |
+|---------|-------------|
+| `researcher.yaml` | Single Cell with Anthropic — basic agent with tools |
+| `ollama-local.yaml` | Single Cell with Ollama — free, self-hosted LLM |
+| `research-team.yaml` | Formation with **star** topology — lead + 3 workers |
+| `hierarchy-formation.yaml` | Formation with **hierarchy** — director → team leads → workers |
+| `ring-consensus.yaml` | Formation with **ring** topology — iterative peer review |
+| `stigmergy-swarm.yaml` | Formation with **stigmergy** — blackboard-based coordination |
+| `custom-routing.yaml` | Formation with **custom** routing — explicit data pipeline |
+| `code-review-mission.yaml` | Mission with completion checks — automated code review task |
+
+```bash
+# Try any example
+kubectl apply -f examples/research-team.yaml
+kais status research-team
+```
+
 ## LLM Providers
 
 | Provider | Config | Notes |

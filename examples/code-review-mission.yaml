@@ -1,0 +1,34 @@
+# Mission: automated code review
+# Assigns a code review task to a formation, with completion checks
+# that verify the review output file exists and contains required sections.
+apiVersion: kais.io/v1
+kind: Mission
+metadata:
+  name: review-auth-module
+  namespace: demo
+spec:
+  formationRef: code-review-team
+  objective: |
+    Review the authentication module in /workspace/src/auth/.
+    Check for security vulnerabilities, code style issues,
+    and suggest improvements. Write your findings to /workspace/review.md.
+
+  entrypoint:
+    cell: reviewer
+    message: Begin the code review of the auth module.
+
+  completion:
+    checks:
+      - name: review-file-exists
+        type: fileExists
+        paths:
+          - /workspace/review.md
+      - name: review-has-findings
+        type: command
+        command: "grep -c '## ' /workspace/review.md"
+        successPattern: "^[3-9]|^[1-9][0-9]"
+    maxAttempts: 2
+    timeout: "10m"
+
+  budget:
+    maxCost: 0.50

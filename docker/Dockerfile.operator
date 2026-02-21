@@ -22,4 +22,4 @@ COPY --from=build /app/packages/operator/package.json packages/operator/package.
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 USER node
-CMD ["node", "packages/operator/dist/index.js"]
+CMD ["node", "packages/operator/dist/main.js"]

@@ -95,7 +95,55 @@ echo "--- Pulling qwen2.5:0.5b model ---"
 OLLAMA_POD=$(kubectl get pods -l app=ollama -o jsonpath='{.items[0].metadata.name}')
 kubectl exec "$OLLAMA_POD" -- ollama pull qwen2.5:0.5b
 
-# 5. Deploy kAIs operator
+# 5. Deploy kAIs operator with RBAC
+echo "--- Setting up operator RBAC ---"
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kais-operator
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kais-operator
+rules:
+  # CRDs: cells, formations, missions
+  - apiGroups: ["kais.io"]
+    resources: ["cells", "cells/status", "formations", "formations/status", "missions", "missions/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pods managed by operator
+  - apiGroups: [""]
+    resources: ["pods", "pods/status", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ConfigMaps for topology routes
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PVCs for workspace storage
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Events for operator status reporting
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kais-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kais-operator
+subjects:
+  - kind: ServiceAccount
+    name: kais-operator
+    namespace: default
+EOF
+
 echo "--- Deploying kAIs operator ---"
 kubectl apply -f - <<EOF
 apiVersion: apps/v1
@@ -113,7 +161,7 @@ spec:
       labels:
         app: kais-operator
     spec:
-      serviceAccountName: default
+      serviceAccountName: kais-operator
       containers:
         - name: operator
           image: kais-operator:e2e

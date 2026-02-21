@@ -172,3 +172,81 @@ export async function listPVCs(labelSelector: string): Promise<k8s.V1PersistentV
   });
   return res.items;
 }
+
+/**
+ * Apply a Mission CRD to the cluster.
+ */
+export async function applyMission(mission: Record<string, unknown>): Promise<void> {
+  try {
+    await customApi.createNamespacedCustomObject({
+      group: CRD_GROUP,
+      version: CRD_VERSION,
+      namespace: NAMESPACE,
+      plural: 'missions',
+      body: mission,
+    });
+  } catch (err: unknown) {
+    const e = err as { response?: { statusCode?: number } };
+    if (e.response?.statusCode === 409) {
+      const name = (mission as { metadata: { name: string } }).metadata.name;
+      await customApi.replaceNamespacedCustomObject({
+        group: CRD_GROUP,
+        version: CRD_VERSION,
+        namespace: NAMESPACE,
+        plural: 'missions',
+        name,
+        body: mission,
+      });
+    } else {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Delete a Mission CRD. Ignores 404.
+ */
+export async function deleteMission(name: string): Promise<void> {
+  try {
+    await customApi.deleteNamespacedCustomObject({
+      group: CRD_GROUP,
+      version: CRD_VERSION,
+      namespace: NAMESPACE,
+      plural: 'missions',
+      name,
+    });
+  } catch (err: unknown) {
+    const e = err as { response?: { statusCode?: number } };
+    if (e.response?.statusCode !== 404) throw err;
+  }
+}
+
+/**
+ * List custom resources matching a label selector.
+ */
+export async function listCustomResources(
+  plural: string,
+  labelSelector: string,
+): Promise<unknown[]> {
+  const res = await customApi.listNamespacedCustomObject({
+    group: CRD_GROUP,
+    version: CRD_VERSION,
+    namespace: NAMESPACE,
+    plural,
+    labelSelector,
+  });
+  return ((res as Record<string, unknown>).items as unknown[]) ?? [];
+}
+
+/**
+ * Get ConfigMap by name. Returns null if not found.
+ */
+export async function getConfigMap(name: string): Promise<k8s.V1ConfigMap | null> {
+  try {
+    return await coreApi.readNamespacedConfigMap({ namespace: NAMESPACE, name });
+  } catch (err: unknown) {
+    const e = err as { response?: { statusCode?: number } };
+    if (e.response?.statusCode === 404) return null;
+    throw err;
+  }
+}

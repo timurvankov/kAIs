@@ -1,0 +1,56 @@
+# Formation: research team with star topology
+# A lead coordinator (Claude) delegates to Ollama workers.
+# The hub/spoke pattern ensures all worker output flows through the lead.
+apiVersion: kais.io/v1
+kind: Formation
+metadata:
+  name: research-team
+  namespace: demo
+spec:
+  cells:
+    - name: lead
+      replicas: 1
+      spec:
+        mind:
+          provider: anthropic
+          model: claude-sonnet-4-20250514
+          systemPrompt: |
+            You are the research team lead. Break down research topics
+            into sub-tasks and delegate them to your workers.
+            Synthesize their findings into a coherent report.
+          temperature: 0.3
+        tools:
+          - name: send_message
+          - name: write_file
+        resources:
+          maxTokensPerTurn: 4096
+          maxCostPerHour: 1.00
+          memoryLimit: 256Mi
+          cpuLimit: 500m
+
+    - name: worker
+      replicas: 3
+      spec:
+        mind:
+          provider: ollama
+          model: qwen2.5:7b
+          systemPrompt: |
+            You are a research worker. When you receive a topic,
+            research it thoroughly and send your findings back.
+          temperature: 0.7
+        tools:
+          - name: web_search
+          - name: send_message
+        resources:
+          maxTokensPerTurn: 2048
+          maxCostPerHour: 0
+          memoryLimit: 512Mi
+          cpuLimit: 1
+
+  topology:
+    type: star
+    hub: lead
+
+  budget:
+    maxTotalCost: 5.00
+    maxCostPerHour: 2.00
