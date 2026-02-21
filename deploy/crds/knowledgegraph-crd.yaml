@@ -1,0 +1,112 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: knowledgegraphs.kais.io
+spec:
+  group: kais.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - scope
+              properties:
+                scope:
+                  type: object
+                  required:
+                    - level
+                  properties:
+                    level:
+                      type: string
+                      enum: [platform, realm, formation, cell]
+                    realmId:
+                      type: string
+                    formationId:
+                      type: string
+                    cellId:
+                      type: string
+                parentRef:
+                  type: string
+                  description: Name of the parent KnowledgeGraph resource
+                dedicated:
+                  type: boolean
+                  default: false
+                  description: "true = own Neo4j Pod, false = shared Neo4j database"
+                inherit:
+                  type: boolean
+                  default: true
+                  description: "true = recall merges parent chain results"
+                retention:
+                  type: object
+                  properties:
+                    maxFacts:
+                      type: integer
+                      minimum: 1
+                    ttlDays:
+                      type: integer
+                      minimum: 1
+                resources:
+                  type: object
+                  description: Resource limits for dedicated mode
+                  properties:
+                    memory:
+                      type: string
+                    cpu:
+                      type: string
+                    storage:
+                      type: string
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Provisioning, Ready, Error]
+                endpoint:
+                  type: string
+                database:
+                  type: string
+                factCount:
+                  type: integer
+                parentChain:
+                  type: array
+                  items:
+                    type: string
+                lastSyncedAt:
+                  type: string
+                  format: date-time
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Scope
+          type: string
+          jsonPath: .spec.scope.level
+        - name: Dedicated
+          type: boolean
+          jsonPath: .spec.dedicated
+        - name: Inherit
+          type: boolean
+          jsonPath: .spec.inherit
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Facts
+          type: integer
+          jsonPath: .status.factCount
+        - name: Parent
+          type: string
+          jsonPath: .spec.parentRef
+  scope: Namespaced
+  names:
+    plural: knowledgegraphs
+    singular: knowledgegraph
+    kind: KnowledgeGraph
+    shortNames:
+      - kg
