@@ -148,13 +148,22 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     },
 
     async updateCellStatus(name, namespace, status) {
-      const existing = await customApi.getNamespacedCustomObject({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'cells',
-        name,
-      });
+      let existing;
+      try {
+        existing = await customApi.getNamespacedCustomObject({
+          group: CRD_GROUP,
+          version: CRD_VERSION,
+          namespace,
+          plural: 'cells',
+          name,
+        });
+      } catch (err: unknown) {
+        if (httpStatus(err) === 404) {
+          console.log(`[kais-operator] cell ${namespace}/${name} not found, skipping status update`);
+          return;
+        }
+        throw err;
+      }
       (existing as Record<string, unknown>).status = status;
       await customApi.replaceNamespacedCustomObjectStatus({
         group: CRD_GROUP,
@@ -169,13 +178,22 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     // --- Formations ---
 
     async updateFormationStatus(name, namespace, status) {
-      const existing = await customApi.getNamespacedCustomObject({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'formations',
-        name,
-      });
+      let existing;
+      try {
+        existing = await customApi.getNamespacedCustomObject({
+          group: CRD_GROUP,
+          version: CRD_VERSION,
+          namespace,
+          plural: 'formations',
+          name,
+        });
+      } catch (err: unknown) {
+        if (httpStatus(err) === 404) {
+          console.log(`[kais-operator] formation ${namespace}/${name} not found, skipping status update`);
+          return;
+        }
+        throw err;
+      }
       (existing as Record<string, unknown>).status = status;
       await customApi.replaceNamespacedCustomObjectStatus({
         group: CRD_GROUP,
@@ -286,13 +304,22 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     // --- Missions ---
 
     async updateMissionStatus(name, namespace, status) {
-      const existing = await customApi.getNamespacedCustomObject({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'missions',
-        name,
-      });
+      let existing;
+      try {
+        existing = await customApi.getNamespacedCustomObject({
+          group: CRD_GROUP,
+          version: CRD_VERSION,
+          namespace,
+          plural: 'missions',
+          name,
+        });
+      } catch (err: unknown) {
+        if (httpStatus(err) === 404) {
+          console.log(`[kais-operator] mission ${namespace}/${name} not found, skipping status update`);
+          return;
+        }
+        throw err;
+      }
       (existing as Record<string, unknown>).status = status;
       await customApi.replaceNamespacedCustomObjectStatus({
         group: CRD_GROUP,
@@ -354,6 +381,18 @@ async function createNatsClient(): Promise<NatsClient> {
       const data = new TextEncoder().encode(JSON.stringify(envelope));
       nc.publish(subject, data);
       console.log(`[NATS] Published to ${subject}: ${message.slice(0, 100)}`);
+    },
+
+    async waitForMessage(subject, timeoutMs) {
+      const sub = nc.subscribe(subject, { max: 1, timeout: timeoutMs });
+      try {
+        for await (const msg of sub) {
+          return new TextDecoder().decode(msg.data);
+        }
+      } catch {
+        // Timeout or other error
+      }
+      return null;
     },
   };
 }

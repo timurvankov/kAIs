@@ -367,6 +367,62 @@ export async function dumpOperatorLogs(tailLines = 100): Promise<void> {
 }
 
 /**
+ * Execute a command inside a pod and return stdout.
+ * Uses the K8s exec API (WebSocket-based).
+ */
+export async function execInPod(
+  podName: string,
+  containerName: string,
+  command: string[],
+  timeoutMs = 30_000,
+): Promise<string> {
+  const exec = new k8s.Exec(kc);
+  const { PassThrough } = await import('node:stream');
+
+  const stdoutStream = new PassThrough();
+  const stderrStream = new PassThrough();
+  let stdoutData = '';
+  let stderrData = '';
+
+  stdoutStream.on('data', (chunk: Buffer) => {
+    stdoutData += chunk.toString();
+  });
+  stderrStream.on('data', (chunk: Buffer) => {
+    stderrData += chunk.toString();
+  });
+
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`execInPod timed out after ${timeoutMs}ms. stdout: ${stdoutData}, stderr: ${stderrData}`));
+    }, timeoutMs);
+
+    exec
+      .exec(
+        NAMESPACE,
+        podName,
+        containerName,
+        command,
+        stdoutStream,
+        stderrStream,
+        null,
+        false,
+        (status) => {
+          clearTimeout(timer);
+          if (status.status === 'Success') {
+            resolve(stdoutData);
+          } else {
+            reject(new Error(`exec failed: ${status.message ?? stderrData}`));
+          }
+        },
+      )
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+/**
  * Get ConfigMap by name. Returns null if not found.
  */
 export async function getConfigMap(name: string): Promise<k8s.V1ConfigMap | null> {

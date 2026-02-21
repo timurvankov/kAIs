@@ -211,7 +211,7 @@ export const FormationStatusSchema = z.object({
 
 // --- CompletionCheck ---
 
-export const CompletionCheckTypeSchema = z.enum(['fileExists', 'command', 'coverage']);
+export const CompletionCheckTypeSchema = z.enum(['fileExists', 'command', 'coverage', 'natsResponse']);
 
 export const CompletionCheckSchema = z.object({
   name: z.string().min(1),
@@ -223,6 +223,10 @@ export const CompletionCheckSchema = z.object({
   jsonPath: z.string().optional(),
   operator: z.string().optional(),
   value: z.number().optional(),
+  /** NATS subject to subscribe to for natsResponse checks. */
+  subject: z.string().optional(),
+  /** Timeout in seconds for natsResponse checks (default: 30). */
+  timeoutSeconds: z.number().positive().optional(),
 });
 
 // --- MissionReview ---

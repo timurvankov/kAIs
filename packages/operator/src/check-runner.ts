@@ -1,7 +1,7 @@
 import type { CompletionCheck } from '@kais/core';
 import * as path from 'node:path';
 
-import type { CommandExecutor, FileSystem } from './types.js';
+import type { CommandExecutor, FileSystem, NatsClient } from './types.js';
 
 /**
  * Result of running a single completion check.
@@ -58,12 +58,14 @@ function compare(actual: number, operator: string, expected: number): boolean {
  * @param workspacePath - The workspace directory to run checks in
  * @param executor - Command executor abstraction
  * @param fs - Filesystem abstraction
+ * @param nats - Optional NATS client for natsResponse checks
  */
 export async function runCheck(
   check: CompletionCheck,
   workspacePath: string,
   executor: CommandExecutor,
   fs: FileSystem,
+  nats?: NatsClient,
 ): Promise<CheckResult> {
   try {
     switch (check.type) {
@@ -73,6 +75,8 @@ export async function runCheck(
         return await runCommandCheck(check, workspacePath, executor);
       case 'coverage':
         return await runCoverageCheck(check, workspacePath, executor);
+      case 'natsResponse':
+        return await runNatsResponseCheck(check, nats);
       default:
         return {
           name: check.name,
@@ -244,5 +248,82 @@ async function runCoverageCheck(
     name: check.name,
     status: passed ? 'Passed' : 'Failed',
     output: `${actual} ${check.operator} ${check.value} → ${passed ? 'true' : 'false'}`,
+  };
+}
+
+/**
+ * natsResponse check: subscribe to a NATS subject and wait for a message
+ * matching the success/fail patterns.
+ */
+async function runNatsResponseCheck(
+  check: CompletionCheck,
+  nats?: NatsClient,
+): Promise<CheckResult> {
+  if (!nats) {
+    return {
+      name: check.name,
+      status: 'Error',
+      output: 'natsResponse check requires a NATS client',
+    };
+  }
+
+  if (!check.subject) {
+    return {
+      name: check.name,
+      status: 'Error',
+      output: 'natsResponse check requires a subject',
+    };
+  }
+
+  const timeoutMs = (check.timeoutSeconds ?? 30) * 1000;
+  const raw = await nats.waitForMessage(check.subject, timeoutMs);
+
+  if (raw === null) {
+    return {
+      name: check.name,
+      status: 'Failed',
+      output: `No message received on "${check.subject}" within ${check.timeoutSeconds ?? 30}s`,
+    };
+  }
+
+  // Try to extract payload.content from envelope, fall back to raw string
+  let content = raw;
+  try {
+    const envelope = JSON.parse(raw);
+    if (typeof envelope.payload?.content === 'string') {
+      content = envelope.payload.content;
+    }
+  } catch {
+    // Not JSON — use raw message
+  }
+
+  // Check failPattern first
+  if (check.failPattern) {
+    const failRegex = new RegExp(check.failPattern);
+    if (failRegex.test(content)) {
+      return {
+        name: check.name,
+        status: 'Failed',
+        output: `Response matched fail pattern "${check.failPattern}"`,
+      };
+    }
+  }
+
+  // Check successPattern
+  if (check.successPattern) {
+    const successRegex = new RegExp(check.successPattern);
+    if (!successRegex.test(content)) {
+      return {
+        name: check.name,
+        status: 'Failed',
+        output: `Response did not match success pattern "${check.successPattern}": ${content.slice(0, 200)}`,
+      };
+    }
+  }
+
+  return {
+    name: check.name,
+    status: 'Passed',
+    output: `Received response: ${content.slice(0, 200)}`,
   };
 }

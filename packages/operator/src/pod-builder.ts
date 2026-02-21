@@ -7,6 +7,7 @@ const CELL_IMAGE = process.env['CELL_IMAGE'] ?? 'kais-cell:latest';
 const CELL_IMAGE_PULL_POLICY = (process.env['CELL_IMAGE_PULL_POLICY'] ?? 'IfNotPresent') as 'Always' | 'Never' | 'IfNotPresent';
 const NATS_URL = process.env['NATS_URL'] ?? 'nats://kais-nats:4222';
 const POSTGRES_URL = process.env['POSTGRES_URL'] ?? 'postgresql://postgres:kais@kais-postgres-postgresql:5432/kais';
+const OLLAMA_URL = process.env['OLLAMA_URL'] ?? 'http://ollama:11434';
 
 /**
  * Build a K8s Pod spec from a Cell CRD.
@@ -102,6 +103,7 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
             { name: 'CELL_SPEC', value: JSON.stringify(cell.spec) },
             { name: 'NATS_URL', value: NATS_URL },
             { name: 'POSTGRES_URL', value: POSTGRES_URL },
+            { name: 'OLLAMA_URL', value: OLLAMA_URL },
           ],
           envFrom: [{ secretRef: { name: 'llm-credentials', optional: true } }],
           resources: {

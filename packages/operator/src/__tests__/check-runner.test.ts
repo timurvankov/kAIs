@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CompletionCheck } from '@kais/core';
 
 import { resolveJsonPath, runCheck } from '../check-runner.js';
-import type { CommandExecutor, FileSystem } from '../types.js';
+import type { CommandExecutor, FileSystem, NatsClient } from '../types.js';
 
 // --- Helpers ---
 
@@ -538,6 +538,153 @@ describe('runCheck - coverage', () => {
 
     expect(result.status).toBe('Error');
     expect(result.output).toContain('requires a command');
+  });
+});
+
+// --- natsResponse checks ---
+
+function createMockNats(response: string | null = null): NatsClient {
+  return {
+    async sendMessageToCell(): Promise<void> {},
+    async waitForMessage(): Promise<string | null> {
+      return response;
+    },
+  };
+}
+
+describe('runCheck - natsResponse', () => {
+  it('passes when message received and matches success pattern', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+      successPattern: 'ok|done',
+      timeoutSeconds: 5,
+    };
+    const nats = createMockNats(JSON.stringify({ payload: { content: 'ok' } }));
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Passed');
+    expect(result.output).toContain('ok');
+  });
+
+  it('fails when no message received (timeout)', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+      timeoutSeconds: 1,
+    };
+    const nats = createMockNats(null);
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('No message received');
+  });
+
+  it('fails when message does not match success pattern', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+      successPattern: '^done$',
+      timeoutSeconds: 5,
+    };
+    const nats = createMockNats(JSON.stringify({ payload: { content: 'I am thinking...' } }));
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('did not match success pattern');
+  });
+
+  it('fails when message matches fail pattern', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+      failPattern: 'error|fail',
+      timeoutSeconds: 5,
+    };
+    const nats = createMockNats(JSON.stringify({ payload: { content: 'error occurred' } }));
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('matched fail pattern');
+  });
+
+  it('passes with raw (non-JSON) message when no patterns specified', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+      timeoutSeconds: 5,
+    };
+    const nats = createMockNats('plain text response');
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Passed');
+    expect(result.output).toContain('plain text response');
+  });
+
+  it('errors when no NATS client provided', async () => {
+    const check: CompletionCheck = {
+      name: 'cell-response',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+    };
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs);
+
+    expect(result.status).toBe('Error');
+    expect(result.output).toContain('requires a NATS client');
+  });
+
+  it('errors when subject is missing', async () => {
+    const check: CompletionCheck = {
+      name: 'no-subject',
+      type: 'natsResponse',
+    };
+    const nats = createMockNats();
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Error');
+    expect(result.output).toContain('requires a subject');
+  });
+
+  it('uses default timeout of 30s when not specified', async () => {
+    const check: CompletionCheck = {
+      name: 'default-timeout',
+      type: 'natsResponse',
+      subject: 'cell.default.test.outbox',
+    };
+    const nats = createMockNats(null);
+    const executor = createMockExecutor();
+    const fs = createMockFs();
+
+    const result = await runCheck(check, '/workspace', executor, fs, nats);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('within 30s');
   });
 });
 

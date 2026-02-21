@@ -66,11 +66,42 @@ const TEST_MISSION = {
   },
 };
 
+/** Mission with natsResponse check — verifies the cell actually replies via NATS. */
+const NATS_MISSION = {
+  apiVersion: 'kais.io/v1',
+  kind: 'Mission',
+  metadata: {
+    name: 'e2e-nats-mission',
+    namespace: 'default',
+  },
+  spec: {
+    cellRef: 'e2e-mission-cell',
+    objective: 'Reply to my message.',
+    entrypoint: {
+      cell: 'e2e-mission-cell',
+      message: 'Say hello.',
+    },
+    completion: {
+      checks: [
+        {
+          name: 'cell-replied',
+          type: 'natsResponse',
+          subject: 'cell.default.e2e-mission-cell.outbox',
+          timeoutSeconds: 60,
+        },
+      ],
+      maxAttempts: 2,
+      timeout: '3m',
+    },
+  },
+};
+
 describe('Mission CRD Lifecycle', () => {
   afterEach(async () => {
     await dumpOperatorLogs(80);
     console.log('[mission-lifecycle] Cleaning up...');
-    await deleteMission('e2e-test-mission');
+    await deleteMission('e2e-test-mission').catch(() => {});
+    await deleteMission('e2e-nats-mission').catch(() => {});
     await deleteCell('e2e-mission-cell');
   });
 
@@ -192,6 +223,53 @@ describe('Mission CRD Lifecycle', () => {
     expect(status.checks).toBeDefined();
     expect(status.checks!.every((c) => c.status === 'Passed')).toBe(true);
     console.log(`[test] PASSED: Mission Succeeded on attempt ${status.attempt}`);
+  });
+
+  it('verifies cell response via natsResponse check', async () => {
+    console.log('[test] === Mission with natsResponse check ===');
+    await applyCell(MISSION_CELL);
+
+    await waitFor(
+      async () => {
+        const cell = await getCustomResource('cells', 'e2e-mission-cell');
+        const status = cell?.status as { phase?: string } | undefined;
+        return status?.phase === 'Running';
+      },
+      { timeoutMs: 90_000, label: 'mission cell running' },
+    );
+
+    console.log('[test] Cell is Running. Applying NATS Mission...');
+    await applyMission(NATS_MISSION);
+
+    // Wait for Mission to reach terminal state
+    await waitFor(
+      async () => {
+        const mission = await getCustomResource('missions', 'e2e-nats-mission');
+        if (!mission) return false;
+        const status = mission.status as {
+          phase?: string;
+          attempt?: number;
+          checks?: { name: string; status: string }[];
+        } | undefined;
+        console.log(
+          `[test] NATS Mission: phase=${status?.phase ?? 'none'}, attempt=${status?.attempt ?? 0}, checks=${JSON.stringify(status?.checks ?? [])}`,
+        );
+        return status?.phase === 'Succeeded' || status?.phase === 'Failed';
+      },
+      { timeoutMs: 180_000, intervalMs: 5_000, label: 'nats mission completion' },
+    );
+
+    const mission = await getCustomResource('missions', 'e2e-nats-mission');
+    expect(mission).not.toBeNull();
+    const status = (mission as Record<string, unknown>).status as {
+      phase: string;
+      attempt: number;
+      checks?: { name: string; status: string }[];
+    };
+    expect(status.phase).toBe('Succeeded');
+    expect(status.checks).toBeDefined();
+    expect(status.checks!.find((c) => c.name === 'cell-replied')?.status).toBe('Passed');
+    console.log(`[test] PASSED: NATS Mission Succeeded — cell replied via NATS`);
   });
 
   it('cleans up Mission CRD on delete', async () => {

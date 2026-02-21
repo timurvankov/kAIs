@@ -15,6 +15,11 @@ import type {
 const RECONCILE_RETRY_DELAY_MS = 5_000;
 const MAX_RECONCILE_RETRIES = 3;
 
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
+  return e.code ?? e.statusCode ?? e.response?.statusCode;
+}
+
 /**
  * MissionController watches Mission CRDs and manages mission lifecycle.
  *
@@ -136,6 +141,11 @@ export class MissionController {
         await this.reconcileMission(mission);
         return;
       } catch (err) {
+        // 404 means the mission was deleted — stop retrying
+        if (httpStatus(err) === 404) {
+          console.log(`[MissionController] mission ${missionId} not found, skipping reconcile`);
+          return;
+        }
         console.error(
           `[MissionController] reconcile attempt ${attempt + 1} failed for ${missionId}:`,
           err,
@@ -325,7 +335,7 @@ export class MissionController {
     const checkResults: MissionStatus['checks'] = [];
 
     for (const check of mission.spec.completion.checks) {
-      const result = await runCheck(check, this.workspacePath, this.executor, this.fs);
+      const result = await runCheck(check, this.workspacePath, this.executor, this.fs, this.nats);
       checkResults.push({
         name: result.name,
         status: result.status === 'Passed' ? 'Passed' : result.status === 'Error' ? 'Error' : 'Failed',

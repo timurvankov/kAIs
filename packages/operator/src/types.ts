@@ -206,6 +206,12 @@ export interface NatsClient {
     namespace: string,
     message: string,
   ): Promise<void>;
+
+  /** Subscribe to a subject and wait for the first message within a timeout. Returns the payload string or null on timeout. */
+  waitForMessage(
+    subject: string,
+    timeoutMs: number,
+  ): Promise<string | null>;
 }
 
 /**

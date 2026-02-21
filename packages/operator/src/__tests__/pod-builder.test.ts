@@ -153,6 +153,15 @@ describe('buildCellPod', () => {
     );
   });
 
+  it('sets OLLAMA_URL env var', () => {
+    const cell = makeCell();
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+    const env = container?.env?.find((e) => e.name === 'OLLAMA_URL');
+
+    expect(env?.value).toBe('http://ollama:11434');
+  });
+
   it('includes secret reference for LLM credentials', () => {
     const cell = makeCell();
     const pod = buildCellPod(cell);

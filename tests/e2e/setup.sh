@@ -192,6 +192,8 @@ spec:
               value: nats://kais-nats:4222
             - name: POSTGRES_URL
               value: postgresql://postgres:kais@kais-postgres-postgresql:5432/kais
+            - name: OLLAMA_URL
+              value: http://ollama:11434
 EOF
 
 echo "--- Waiting for operator pod ---"
