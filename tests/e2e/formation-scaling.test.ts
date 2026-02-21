@@ -9,6 +9,7 @@ import {
   getCustomResource,
   listCustomResources,
   customApi,
+  dumpOperatorLogs,
 } from './helpers.js';
 
 const CELL_SPEC = {
@@ -29,6 +30,7 @@ const CELL_SPEC = {
 
 describe('Formation Scaling', () => {
   afterEach(async () => {
+    await dumpOperatorLogs(80);
     console.log('[scaling] Cleaning up...');
     await deleteFormation('e2e-scale-formation');
     await waitFor(

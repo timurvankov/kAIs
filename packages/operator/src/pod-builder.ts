@@ -84,7 +84,7 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
           apiVersion: 'kais.io/v1',
           kind: 'Cell',
           name: cell.metadata.name,
-          uid: cell.metadata.uid,
+          uid: cell.metadata.uid!, // Assigned by K8s API server before reconcile
           controller: true,
           blockOwnerDeletion: true,
         },

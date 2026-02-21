@@ -11,6 +11,7 @@ import {
   getCustomResource,
   getConfigMap,
   listCustomResources,
+  dumpOperatorLogs,
 } from './helpers.js';
 
 const CELL_SPEC = {
@@ -31,6 +32,7 @@ const CELL_SPEC = {
 
 describe('Formation Topologies', () => {
   afterEach(async () => {
+    await dumpOperatorLogs(80);
     console.log('[topologies] Cleaning up...');
     await deleteFormation('e2e-star-formation');
     await deleteFormation('e2e-ring-formation');

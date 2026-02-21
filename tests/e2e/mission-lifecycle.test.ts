@@ -10,6 +10,7 @@ import {
   waitFor,
   getCustomResource,
   dumpClusterState,
+  dumpOperatorLogs,
 } from './helpers.js';
 
 const MISSION_CELL = {
@@ -67,6 +68,7 @@ const TEST_MISSION = {
 
 describe('Mission CRD Lifecycle', () => {
   afterEach(async () => {
+    await dumpOperatorLogs(80);
     console.log('[mission-lifecycle] Cleaning up...');
     await deleteMission('e2e-test-mission');
     await deleteCell('e2e-mission-cell');

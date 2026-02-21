@@ -11,6 +11,7 @@ import {
   getCustomResource,
   customApi,
   dumpClusterState,
+  dumpOperatorLogs,
 } from './helpers.js';
 
 const TEST_FORMATION = {
@@ -66,9 +67,12 @@ describe('Formation CRD Lifecycle', () => {
   beforeAll(async () => {
     console.log('[formation-lifecycle] Starting test suite');
     await dumpClusterState('before formation-lifecycle tests');
+    await dumpOperatorLogs(50);
   });
 
   afterEach(async () => {
+    console.log('[formation-lifecycle] Dumping operator logs before cleanup...');
+    await dumpOperatorLogs(80);
     console.log('[formation-lifecycle] Cleaning up...');
     await deleteFormation('e2e-test-formation');
     await waitFor(

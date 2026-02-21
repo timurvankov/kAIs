@@ -358,8 +358,7 @@ export class FormationController {
       metadata: {
         name: cellName,
         namespace,
-        uid: '', // Assigned by K8s API server
-        resourceVersion: '', // Assigned by K8s API server
+        // uid and resourceVersion are assigned by K8s API server on creation
         ownerReferences: [
           {
             apiVersion: 'kais.io/v1',

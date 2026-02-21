@@ -340,6 +340,33 @@ export async function dumpClusterState(context?: string): Promise<void> {
 }
 
 /**
+ * Dump operator pod logs for debugging.
+ */
+export async function dumpOperatorLogs(tailLines = 100): Promise<void> {
+  try {
+    const pods = await coreApi.listNamespacedPod({
+      namespace: NAMESPACE,
+      labelSelector: 'app=kais-operator',
+    });
+    if (pods.items.length === 0) {
+      console.log('[operatorLogs] No operator pods found');
+      return;
+    }
+    const podName = pods.items[0].metadata!.name!;
+    const log = await coreApi.readNamespacedPodLog({
+      name: podName,
+      namespace: NAMESPACE,
+      tailLines,
+    });
+    console.log(`\n[operatorLogs] === Operator pod ${podName} (last ${tailLines} lines) ===`);
+    console.log(log);
+    console.log('[operatorLogs] === end ===\n');
+  } catch (err) {
+    console.log(`[operatorLogs] Failed to fetch operator logs: ${(err as Error).message}`);
+  }
+}
+
+/**
  * Get ConfigMap by name. Returns null if not found.
  */
 export async function getConfigMap(name: string): Promise<k8s.V1ConfigMap | null> {

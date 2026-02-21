@@ -2,7 +2,7 @@
  * E2E: Cell CRD lifecycle — create, verify Pod, delete, verify cleanup.
  */
 import { describe, it, afterEach, expect, beforeAll } from 'vitest';
-import { applyCell, deleteCell, listPods, waitFor, getCustomResource, dumpClusterState } from './helpers.js';
+import { applyCell, deleteCell, listPods, waitFor, getCustomResource, dumpClusterState, dumpOperatorLogs } from './helpers.js';
 
 const TEST_CELL = {
   apiVersion: 'kais.io/v1',
@@ -35,6 +35,7 @@ describe('Cell CRD Lifecycle', () => {
   });
 
   afterEach(async () => {
+    await dumpOperatorLogs(80);
     console.log('[cell-lifecycle] Cleaning up...');
     await deleteCell('e2e-test-cell');
     await waitFor(

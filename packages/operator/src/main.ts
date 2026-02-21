@@ -240,7 +240,7 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
           kind: 'Cell',
           name: cell.metadata.name,
           namespace: cell.metadata.namespace,
-          uid: cell.metadata.uid,
+          uid: cell.metadata.uid!,
         },
         reason,
         message,

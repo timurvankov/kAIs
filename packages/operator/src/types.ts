@@ -18,8 +18,8 @@ export interface CellResource {
   metadata: {
     name: string;
     namespace: string;
-    uid: string;
-    resourceVersion: string;
+    uid?: string;
+    resourceVersion?: string;
     ownerReferences?: k8s.V1OwnerReference[];
     labels?: Record<string, string>;
   };
