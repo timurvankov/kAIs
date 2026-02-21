@@ -347,6 +347,29 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     });
   });
 
+  // ========== Phase 8: Auth + RBAC query endpoints ==========
+
+  if (auth && rbac) {
+    // GET /api/v1/auth/whoami — return authenticated user info
+    app.get('/api/v1/auth/whoami', async (req) => {
+      const user = (req as FastifyRequest & { user?: AuthUser }).user;
+      return { user: user ?? null };
+    });
+
+    // GET /api/v1/roles — list all roles
+    app.get('/api/v1/roles', async () => {
+      const roles = await rbac.listRoles();
+      return { roles };
+    });
+
+    // GET /api/v1/roles/:name — get a single role
+    app.get<{ Params: { name: string } }>('/api/v1/roles/:name', async (req, reply) => {
+      const role = await rbac.getRole(req.params.name);
+      if (!role) return reply.status(404).send({ error: 'Role not found' });
+      return role;
+    });
+  }
+
   // ---------- Knowledge proxy routes ----------
   const KNOWLEDGE_URL = process.env['KNOWLEDGE_SERVICE_URL'] ?? 'http://kais-knowledge.kais-system:8000';
 

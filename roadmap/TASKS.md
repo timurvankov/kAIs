@@ -744,19 +744,19 @@ STREAM C (MCP Gateway + Security):
   C4 [orch]    Cross-level knowledge scoping (tree-based visibility) — depends on Phase 4
 
 STREAM D (CLI + Dashboard):
-  D1 [cli]     Tree commands (tree, budget show/tree/top-up/history)
-  D2 [cli]     Spawn request commands (list, approve, reject)
-  D3 [cli]     RBAC commands (auth, roles, bind)
-  D4 [cli]     MCP commands (serve, status)
-  D5 [dash]    Tree visualization in dashboard
-  D6 [dash]    Spawn approval page
-  D7 [dash]    RBAC management page
+  D1 [cli]     ✅ Tree commands (tree, budget show/tree/top-up/history)
+  D2 [cli]     ✅ Spawn request commands (list, approve, reject)
+  D3 [cli]     ✅ RBAC commands (auth, roles, bind)
+  D4 [cli]     ✅ MCP commands (serve, status)
+  D5 [dash]    ✅ Tree visualization in dashboard
+  D6 [dash]    ✅ Spawn approval page
+  D7 [dash]    ✅ RBAC management page
 
 TESTS:
   T1 [test]    ✅ Unit: Recursion safety validation (15 tests)
   T2 [test]    ✅ Unit: Budget ledger operations, tree balance (18 + 15 tests)
   T3 [test]    ✅ Unit: RBAC role matching, namespace scoping (15 tests)
-  T4 [test]    Integration: 3-level recursive spawn with budget cascade
+  T4 [test]    ✅ Integration: 3-level recursive spawn with budget cascade (16 tests)
   T5 [test]    ✅ Integration: RBAC enforcement (authorized/unauthorized) (8 tests)
   T6 [test]    ✅ Integration: MCP Gateway → launch team → results (16 tests)
   T7 [test]    ✅ Unit: NATS auth credential management + subject matching (25 tests)
