@@ -1,5 +1,6 @@
 // Controllers
 export { CellController } from './controller.js';
+export { ExperimentController } from './experiment-controller.js';
 export { FormationController } from './formation-controller.js';
 export { MissionController } from './mission-controller.js';
 
@@ -30,6 +31,8 @@ export type {
   CellResource,
   CellEventType,
   CommandExecutor,
+  ExperimentEventType,
+  ExperimentResource,
   FileSystem,
   FormationResource,
   FormationEventType,

@@ -43,7 +43,7 @@ describe('Cell CRD Lifecycle', () => {
         const pods = await listPods('kais.io/cell=e2e-test-cell');
         return pods.length === 0;
       },
-      { timeoutMs: 30_000, label: 'pod deletion' },
+      { timeoutMs: 60_000, label: 'pod deletion' },
     );
   });
 

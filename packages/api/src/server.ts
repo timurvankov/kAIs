@@ -1,12 +1,15 @@
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
+import { SpanKind, SpanStatusCode, context, propagation } from '@opentelemetry/api';
 
-import { createEnvelope } from '@kais/core';
+import { createEnvelope, getTracer } from '@kais/core';
 import type { AuthUser, RbacResource, RbacVerb } from '@kais/core';
 import type { DbClient, NatsClient } from './clients.js';
 import type { AuthProvider } from './auth.js';
 import { extractBearerToken } from './auth.js';
 import type { RbacService } from './rbac.js';
+
+const tracer = getTracer('kais-api');
 
 /**
  * RFC 1123 label: lowercase alphanumeric and hyphens, 1-63 chars,
@@ -57,6 +60,34 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
 
   const app = Fastify({ logger });
   await app.register(fastifyWebsocket);
+
+  // ---------- OTel request tracing ----------
+
+  app.addHook('onRequest', (req, _reply, done) => {
+    const span = tracer.startSpan(`${req.method} ${req.routeOptions?.url ?? req.url}`, {
+      kind: SpanKind.SERVER,
+      attributes: {
+        'http.method': req.method,
+        'http.url': req.url,
+      },
+    });
+    (req as any).otelSpan = span;
+    done();
+  });
+
+  app.addHook('onResponse', (req, reply, done) => {
+    const span = (req as any).otelSpan;
+    if (span) {
+      span.setAttributes({ 'http.status_code': reply.statusCode });
+      if (reply.statusCode >= 400) {
+        span.setStatus({ code: SpanStatusCode.ERROR });
+      } else {
+        span.setStatus({ code: SpanStatusCode.OK });
+      }
+      span.end();
+    }
+    done();
+  });
 
   // ---------- Decorate request with user ----------
 
@@ -132,11 +163,15 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     if (!validateIdentifier(namespace)) {
       return reply.status(400).send({ error: 'Invalid namespace' });
     }
+    const traceCtx: Record<string, string> = {};
+    propagation.inject(context.active(), traceCtx);
+
     const envelope = createEnvelope({
       from: 'api',
       to: `cell.${namespace}.${name}`,
       type: 'message',
       payload: { content: body.message },
+      traceContext: Object.keys(traceCtx).length > 0 ? traceCtx : undefined,
     });
 
     const encoded = new TextEncoder().encode(JSON.stringify(envelope));
@@ -214,6 +249,39 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
       totalCost: parseFloat(row?.total_cost ?? '0'),
       totalTokens: parseInt(row?.total_tokens ?? '0', 10),
       events: parseInt(row?.events ?? '0', 10),
+    };
+  });
+
+  // ---------- GET /api/v1/metrics ----------
+  // Aggregated platform-wide metrics
+
+  app.get('/api/v1/metrics', async () => {
+    // Count distinct active cells (cells that had events in the last hour)
+    const activeCellsResult = await db.query(
+      `SELECT COUNT(DISTINCT cell_name) as count
+       FROM cell_events
+       WHERE created_at > NOW() - INTERVAL '1 hour'`,
+    );
+
+    // Aggregate today's cost and tokens from response events
+    const todayResult = await db.query(
+      `SELECT
+         COUNT(*) as llm_calls,
+         COALESCE(SUM((payload->'usage'->>'cost')::numeric), 0) as total_cost,
+         COALESCE(SUM((payload->'usage'->>'totalTokens')::integer), 0) as total_tokens
+       FROM cell_events
+       WHERE event_type = 'response'
+         AND created_at > CURRENT_DATE`,
+    );
+
+    const activeCells = parseInt((activeCellsResult.rows[0] as any)?.count ?? '0', 10);
+    const row = todayResult.rows[0] as any;
+
+    return {
+      activeCells,
+      totalCostToday: parseFloat(row?.total_cost ?? '0'),
+      totalTokensToday: parseInt(row?.total_tokens ?? '0', 10),
+      llmCallsToday: parseInt(row?.llm_calls ?? '0', 10),
     };
   });
 

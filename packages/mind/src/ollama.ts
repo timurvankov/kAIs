@@ -50,15 +50,19 @@ interface OllamaChatResponse {
  * Ollama supports system, user, assistant, and tool roles natively.
  */
 function mapMessages(messages: Message[]): OllamaMessage[] {
-  return messages.map((msg) => {
+  const out: OllamaMessage[] = [];
+
+  for (const msg of messages) {
     if (typeof msg.content === 'string') {
-      return { role: msg.role, content: msg.content };
+      out.push({ role: msg.role, content: msg.content });
+      continue;
     }
 
-    // For array content, we need to flatten blocks into a single content string
-    // and extract tool_calls for assistant messages.
+    // For array content, split into: text/tool_use parts (keep original role)
+    // and tool_result parts (emit as role: 'tool').
     const textParts: string[] = [];
     const toolCalls: OllamaToolCall[] = [];
+    const toolResults: string[] = [];
 
     for (const block of msg.content as ContentBlock[]) {
       if (block.type === 'text' && block.text) {
@@ -71,21 +75,29 @@ function mapMessages(messages: Message[]): OllamaMessage[] {
           },
         });
       } else if (block.type === 'tool_result') {
-        textParts.push(block.content ?? '');
+        toolResults.push(block.content ?? '');
       }
     }
 
-    const result: OllamaMessage = {
-      role: msg.role,
-      content: textParts.join('\n'),
-    };
-
-    if (toolCalls.length > 0) {
-      result.tool_calls = toolCalls;
+    // Emit assistant message with text + tool_calls first
+    if (textParts.length > 0 || toolCalls.length > 0) {
+      const result: OllamaMessage = {
+        role: msg.role,
+        content: textParts.join('\n'),
+      };
+      if (toolCalls.length > 0) {
+        result.tool_calls = toolCalls;
+      }
+      out.push(result);
     }
 
-    return result;
-  });
+    // Then emit tool results as separate role: 'tool' messages
+    for (const content of toolResults) {
+      out.push({ role: 'tool', content });
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -122,6 +134,7 @@ export class OllamaMind implements Mind {
       model: this.model,
       messages: mapMessages(input.messages),
       stream: false,
+      think: false, // Disable extended thinking to reduce latency on CPU
       ...(Object.keys(options).length > 0 && { options }),
     };
 
@@ -131,11 +144,19 @@ export class OllamaMind implements Mind {
 
     let res: Response;
     try {
+      const msgCount = (body['messages'] as unknown[]).length;
+      console.log(`[OllamaMind] POST ${this.baseUrl}/api/chat model=${this.model} msgs=${msgCount} tools=${(body['tools'] as unknown[] | undefined)?.length ?? 0}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 600_000); // 10 min timeout
+      const t0 = Date.now();
       res = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
+      console.log(`[OllamaMind] Response ${res.status} in ${Date.now() - t0}ms`);
     } catch (err) {
       throw new TransientError(
         `Ollama connection error: ${err instanceof Error ? err.message : String(err)}`,

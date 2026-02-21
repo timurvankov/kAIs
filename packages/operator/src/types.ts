@@ -1,6 +1,8 @@
 import type {
   CellSpec,
   CellStatus,
+  ExperimentSpec,
+  ExperimentStatus,
   FormationSpec,
   FormationStatus,
   MissionSpec,
@@ -88,6 +90,35 @@ export type MissionEventType =
   | 'MissionCompleted'
   | 'MissionFailed'
   | 'MissionReviewRequested';
+
+/**
+ * Kubernetes custom resource representing an Experiment.
+ * Matches the Experiment CRD defined in crds/experiment-crd.yaml.
+ */
+export interface ExperimentResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Experiment';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: ExperimentSpec;
+  status?: ExperimentStatus;
+}
+
+/**
+ * Event types emitted by the ExperimentController.
+ */
+export type ExperimentEventType =
+  | 'ExperimentStarted'
+  | 'ExperimentRunCompleted'
+  | 'ExperimentAnalyzing'
+  | 'ExperimentCompleted'
+  | 'ExperimentFailed'
+  | 'ExperimentAborted'
+  | 'ExperimentOverBudget';
 
 /**
  * Abstraction over the K8s API calls used by CellController and FormationController.
@@ -193,6 +224,23 @@ export interface KubeClient {
     reason: string,
     message: string,
   ): Promise<void>;
+
+  // --- Experiment management ---
+
+  /** Update the status subresource of an Experiment CRD. */
+  updateExperimentStatus(
+    name: string,
+    namespace: string,
+    status: ExperimentStatus,
+  ): Promise<void>;
+
+  /** Create a K8s Event for an Experiment. */
+  emitExperimentEvent(
+    experiment: ExperimentResource,
+    eventType: ExperimentEventType,
+    reason: string,
+    message: string,
+  ): Promise<void>;
 }
 
 /**
@@ -207,10 +255,12 @@ export interface NatsClient {
     message: string,
   ): Promise<void>;
 
-  /** Read all retained messages on a subject from JetStream. Returns array of payload strings. */
+  /** Read messages on a subject from JetStream. Returns array of payload strings.
+   *  @param since - Optional ISO timestamp. Only messages published after this time are returned. */
   waitForMessage(
     subject: string,
     timeoutMs: number,
+    since?: string,
   ): Promise<string[]>;
 }
 

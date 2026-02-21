@@ -16,6 +16,13 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-metrics-otlp-grpc": "^0.57.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.57.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/sdk-node": "^0.57.0",
+    "pino": "^9.6.0",
+    "simple-statistics": "^7.8.8",
     "zod": "^3.24.0"
   },
   "devDependencies": {

@@ -14,7 +14,7 @@ const CRD_VERSION = 'v1';
 const NAMESPACE = 'default';
 
 /** Extract HTTP status code from @kubernetes/client-node errors (v0.x and v1.x). */
-function httpStatus(err: unknown): number | undefined {
+export function httpStatus(err: unknown): number | undefined {
   const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
   return e.code ?? e.statusCode ?? e.response?.statusCode;
 }

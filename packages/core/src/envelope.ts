@@ -13,6 +13,7 @@ export function createEnvelope(params: {
   payload: unknown;
   traceId?: string;
   replyTo?: string;
+  traceContext?: Record<string, string>;
 }): Envelope {
   const envelope: Envelope = {
     id: randomUUID(),
@@ -23,6 +24,7 @@ export function createEnvelope(params: {
     timestamp: new Date().toISOString(),
     traceId: params.traceId,
     replyTo: params.replyTo,
+    traceContext: params.traceContext,
   };
 
   // Validate the constructed envelope

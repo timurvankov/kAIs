@@ -81,4 +81,43 @@ describe('createEnvelope', () => {
       expect(envelope.type).toBe(type);
     }
   });
+
+  it('includes traceContext when provided', () => {
+    const ctx = { traceparent: '00-abc123-def456-01', tracestate: 'vendor=value' };
+    const envelope = createEnvelope({
+      from: 'cell.default.a',
+      to: 'cell.default.b',
+      type: 'message',
+      payload: null,
+      traceContext: ctx,
+    });
+
+    expect(envelope.traceContext).toEqual(ctx);
+  });
+
+  it('traceContext is optional and defaults to undefined', () => {
+    const envelope = createEnvelope({
+      from: 'cell.default.a',
+      to: 'cell.default.b',
+      type: 'message',
+      payload: null,
+    });
+
+    expect(envelope.traceContext).toBeUndefined();
+  });
+
+  it('validates traceContext through Zod schema', () => {
+    const ctx = { traceparent: '00-abc123-def456-01' };
+    const envelope = createEnvelope({
+      from: 'cell.default.a',
+      to: 'cell.default.b',
+      type: 'message',
+      payload: null,
+      traceContext: ctx,
+    });
+
+    // Re-parse through schema to confirm it validates
+    const parsed = EnvelopeSchema.parse(envelope);
+    expect(parsed.traceContext).toEqual(ctx);
+  });
 });
