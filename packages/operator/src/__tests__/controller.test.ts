@@ -487,8 +487,9 @@ describe('CellController.handlePodEvent', () => {
     expect(client.deletePodCalls).toHaveLength(1);
   });
 
-  it('does not reconcile for Running Pod updates', async () => {
+  it('reconciles cell status when Pod enters Running phase', async () => {
     const cell = makeCell();
+    cell.status = { phase: 'Pending', podName: 'cell-researcher' };
     client.cells.set(`${cell.metadata.namespace}/${cell.metadata.name}`, cell);
 
     const pod: k8s.V1Pod = {
@@ -500,15 +501,16 @@ describe('CellController.handlePodEvent', () => {
           'kais.io/role': 'cell',
         },
       },
+      spec: { containers: [{ name: 'mind', image: 'kais-cell:test', env: [{ name: 'CELL_SPEC', value: JSON.stringify(cell.spec) }] }] },
       status: { phase: 'Running' },
     };
+    client.pods.set('default/cell-researcher', pod);
 
     await controller.handlePodEvent('update', pod);
 
-    // Should NOT trigger reconciliation for healthy pods
-    expect(client.createPodCalls).toHaveLength(0);
-    expect(client.deletePodCalls).toHaveLength(0);
-    expect(client.statusUpdates).toHaveLength(0);
+    // Should trigger reconciliation → sync cell status to Running
+    expect(client.statusUpdates).toHaveLength(1);
+    expect(client.statusUpdates[0]!.status.phase).toBe('Running');
   });
 
   it('ignores Pods without kais.io/cell label', async () => {

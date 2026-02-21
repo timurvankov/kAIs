@@ -218,10 +218,12 @@ export class CellController {
       return;
     }
 
-    // event === 'update': check if phase is Failed or Unknown
+    // event === 'update': reconcile when pod phase changes to Running, Failed, or Unknown
+    // Running: sync cell status from Pending → Running
+    // Failed/Unknown: restart the pod
     const phase = pod.status?.phase;
-    if (phase === 'Failed' || phase === 'Unknown') {
-      console.log(`[CellController] pod ${podId} entered ${phase} phase, reconciling cell ${cellName}`);
+    if (phase === 'Running' || phase === 'Failed' || phase === 'Unknown') {
+      console.log(`[CellController] pod ${podId} phase=${phase}, reconciling cell ${cellName}`);
       await this.reconcileCellByName(cellName, namespace);
     }
   }
