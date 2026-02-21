@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kais-operator
+description: kAIs Cell Operator - watches Cell CRDs and manages Cell Pods
+version: 0.1.0
+appVersion: "0.0.1"
+type: application

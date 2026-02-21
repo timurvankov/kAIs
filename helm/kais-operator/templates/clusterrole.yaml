@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-kais-operator
+  labels:
+    app.kubernetes.io/name: kais-operator
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: kais
+rules:
+  # Watch and manage Cell CRDs
+  - apiGroups: ["kais.io"]
+    resources: ["cells"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kais.io"]
+    resources: ["cells/status"]
+    verbs: ["get", "update", "patch"]
+  # Manage Pods for Cells
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Emit Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Read Secrets (for LLM credentials)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]

@@ -1,0 +1,28 @@
+# Operator image
+image:
+  repository: kais-operator
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Number of operator replicas (typically 1 for leader election)
+replicaCount: 1
+
+# Resource limits for the operator
+resources:
+  requests:
+    memory: "64Mi"
+    cpu: "50m"
+  limits:
+    memory: "128Mi"
+    cpu: "200m"
+
+# Service account name
+serviceAccount:
+  name: kais-operator
+  annotations: {}
+
+# Namespace to deploy into
+namespace: kais-system
+
+# Log level
+logLevel: info

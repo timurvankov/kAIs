@@ -1,0 +1,41 @@
+repositories:
+  - name: bitnami
+    url: https://charts.bitnami.com/bitnami
+  - name: nats
+    url: https://nats-io.github.io/k8s/helm/charts
+
+releases:
+  - name: postgres
+    namespace: kais-system
+    chart: bitnami/postgresql
+    values:
+      - auth:
+          postgresPassword: kais
+          database: kais
+        primary:
+          persistence:
+            size: 5Gi
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+            limits: { memory: 512Mi, cpu: 500m }
+
+  - name: nats
+    namespace: kais-system
+    chart: nats/nats
+    values:
+      - nats:
+          jetstream:
+            enabled: true
+            memStorage:
+              enabled: true
+              size: 256Mi
+            fileStorage:
+              enabled: true
+              size: 1Gi
+        cluster:
+          enabled: false   # single node for minikube
+
+  - name: ollama
+    namespace: kais-system
+    chart: ./helm/kais-infra/charts/ollama
+    condition: ollama.enabled
