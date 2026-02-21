@@ -24,6 +24,8 @@ export { createSendMessageTool } from './tools/index.js';
 export { createReadFileTool } from './tools/index.js';
 export { createWriteFileTool } from './tools/index.js';
 export { createBashTool } from './tools/index.js';
+export { createSpawnCellTool } from './tools/index.js';
+export { createCommitFileTool } from './tools/index.js';
 export type {
   NatsPublisher,
   SendMessageConfig,
@@ -33,4 +35,13 @@ export type {
   WriteFileConfig,
   CommandExecutor,
   BashConfig,
+  KubeClientLite,
+  CellResourceLite,
+  SpawnCellConfig,
+  CommitFileFs,
+  CommitFileConfig,
 } from './tools/index.js';
+
+// Topology
+export { createTopologyEnforcer } from './topology/topology-enforcer.js';
+export type { TopologyEnforcer, TopologyFs } from './topology/topology-enforcer.js';

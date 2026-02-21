@@ -6,7 +6,7 @@ import type { CellResource } from './types.js';
  * Recursive deep-equal comparison that is key-order independent.
  * Handles primitives, arrays, and plain objects.
  */
-function deepEqual(a: unknown, b: unknown): boolean {
+export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;
   if (typeof a !== typeof b) return false;

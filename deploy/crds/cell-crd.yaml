@@ -60,6 +60,12 @@ spec:
                       type: string
                     memoryLimit:
                       type: string
+                parentRef:
+                  type: string
+                  description: Reference to a parent Cell name
+                formationRef:
+                  type: string
+                  description: Reference to the Formation this Cell belongs to
               required: ["mind"]
             status:
               type: object

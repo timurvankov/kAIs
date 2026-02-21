@@ -139,7 +139,7 @@ describe('buildCellPod', () => {
     const container = pod.spec?.containers?.[0];
     const env = container?.env?.find((e) => e.name === 'NATS_URL');
 
-    expect(env?.value).toBe('nats://nats.kais-system:4222');
+    expect(env?.value).toBe('nats://kais-nats:4222');
   });
 
   it('sets POSTGRES_URL env var', () => {
@@ -149,8 +149,17 @@ describe('buildCellPod', () => {
     const env = container?.env?.find((e) => e.name === 'POSTGRES_URL');
 
     expect(env?.value).toBe(
-      'postgresql://postgres:kais@postgres-postgresql.kais-system:5432/kais',
+      'postgresql://postgres:kais@kais-postgres-postgresql:5432/kais',
     );
+  });
+
+  it('sets OLLAMA_URL env var', () => {
+    const cell = makeCell();
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+    const env = container?.env?.find((e) => e.name === 'OLLAMA_URL');
+
+    expect(env?.value).toBe('http://ollama:11434');
   });
 
   it('includes secret reference for LLM credentials', () => {
@@ -159,7 +168,7 @@ describe('buildCellPod', () => {
     const container = pod.spec?.containers?.[0];
 
     expect(container?.envFrom).toEqual([
-      { secretRef: { name: 'llm-credentials' } },
+      { secretRef: { name: 'llm-credentials', optional: true } },
     ]);
   });
 
@@ -220,5 +229,161 @@ describe('buildCellPod', () => {
     expect(pod.metadata?.name).toBe('cell-writer');
     expect(pod.metadata?.namespace).toBe('production');
     expect(pod.metadata?.ownerReferences![0]?.uid).toBe('xyz-789');
+  });
+
+  // --- Formation workspace/topology mounts ---
+
+  it('does not mount workspace or topology volumes for standalone cells', () => {
+    const cell = makeCell();
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+
+    expect(container?.volumeMounts).toBeUndefined();
+    expect(pod.spec?.volumes).toBeUndefined();
+  });
+
+  it('mounts workspace PVC when cell has formationRef', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'You are a helpful assistant.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+
+    const sharedMount = container?.volumeMounts?.find(
+      (vm) => vm.mountPath === '/workspace/shared',
+    );
+    expect(sharedMount).toBeDefined();
+    expect(sharedMount?.name).toBe('workspace');
+    expect(sharedMount?.subPath).toBe('shared');
+
+    const privateMount = container?.volumeMounts?.find(
+      (vm) => vm.mountPath === `/workspace/private/${cell.metadata.name}`,
+    );
+    expect(privateMount).toBeDefined();
+    expect(privateMount?.name).toBe('workspace');
+    expect(privateMount?.subPath).toBe(`private/${cell.metadata.name}`);
+  });
+
+  it('mounts topology ConfigMap when cell has formationRef', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'You are a helpful assistant.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+
+    const topologyMount = container?.volumeMounts?.find(
+      (vm) => vm.mountPath === '/etc/kais/topology',
+    );
+    expect(topologyMount).toBeDefined();
+    expect(topologyMount?.name).toBe('topology');
+    expect(topologyMount?.readOnly).toBe(true);
+  });
+
+  it('creates workspace volume with correct PVC claimName', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+
+    const workspaceVol = pod.spec?.volumes?.find((v) => v.name === 'workspace');
+    expect(workspaceVol).toBeDefined();
+    expect(workspaceVol?.persistentVolumeClaim?.claimName).toBe(
+      'workspace-my-formation',
+    );
+  });
+
+  it('creates topology volume with correct ConfigMap name', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+
+    const topologyVol = pod.spec?.volumes?.find((v) => v.name === 'topology');
+    expect(topologyVol).toBeDefined();
+    expect(topologyVol?.configMap?.name).toBe('topology-my-formation');
+  });
+
+  it('adds formation label when cell has formationRef', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+
+    expect(pod.metadata?.labels?.['kais.io/formation']).toBe('my-formation');
+  });
+
+  it('does not add formation label for standalone cells', () => {
+    const cell = makeCell();
+    const pod = buildCellPod(cell);
+
+    expect(pod.metadata?.labels?.['kais.io/formation']).toBeUndefined();
+  });
+
+  it('has exactly 3 volume mounts when cell has formationRef', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+
+    expect(container?.volumeMounts).toHaveLength(3);
+  });
+
+  it('has exactly 2 volumes when cell has formationRef', () => {
+    const cell = makeCell({
+      spec: {
+        mind: {
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test.',
+        },
+        formationRef: 'my-formation',
+      },
+    });
+    const pod = buildCellPod(cell);
+
+    expect(pod.spec?.volumes).toHaveLength(2);
   });
 });

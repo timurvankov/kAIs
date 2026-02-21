@@ -1,0 +1,26 @@
+# Cell: local Ollama model (free, no API key needed)
+# Run a self-hosted LLM using Ollama. Great for development and testing.
+# Prerequisites: Ollama running at localhost:11434 or set OLLAMA_HOST.
+apiVersion: kais.io/v1
+kind: Cell
+metadata:
+  name: local-assistant
+  namespace: demo
+spec:
+  mind:
+    provider: ollama
+    model: qwen2.5:7b
+    systemPrompt: |
+      You are a helpful coding assistant. You can read and write files,
+      and execute shell commands to help the user.
+    temperature: 0.3
+    maxTokens: 4096
+  tools:
+    - name: read_file
+    - name: write_file
+    - name: bash
+  resources:
+    maxTokensPerTurn: 4096
+    maxCostPerHour: 0
+    memoryLimit: 1Gi
+    cpuLimit: 2

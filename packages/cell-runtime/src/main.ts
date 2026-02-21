@@ -12,10 +12,11 @@ import { createWriteFileTool } from './tools/write-file.js';
 import { createBashTool } from './tools/bash.js';
 import type { Tool } from './tools/tool-executor.js';
 import type { CellSpec } from '@kais/core';
+import { createTopologyEnforcer } from './topology/topology-enforcer.js';
 
-const CELL_NAME = process.env['CELL_NAME'];
+const CELL_NAME = process.env['CELL_NAME'] ?? '';
 const CELL_NAMESPACE = process.env['CELL_NAMESPACE'] ?? 'default';
-const CELL_SPEC_JSON = process.env['CELL_SPEC'];
+const CELL_SPEC_JSON = process.env['CELL_SPEC'] ?? '';
 const NATS_URL = process.env['NATS_URL'] ?? 'nats://localhost:4222';
 
 if (!CELL_NAME || !CELL_SPEC_JSON) {
@@ -50,6 +51,9 @@ async function main() {
     },
   };
 
+  // Create topology enforcer (loads route table from ConfigMap mount)
+  const topologyEnforcer = await createTopologyEnforcer(CELL_NAME);
+
   // Create Mind based on provider
   const { provider, model } = spec.mind;
   let mind;
@@ -77,6 +81,7 @@ async function main() {
         nats: { publish: (s, d) => nats.publish(s, d) },
         cellName: CELL_NAME,
         namespace: CELL_NAMESPACE,
+        topologyEnforcer,
       }),
     );
   }
@@ -129,6 +134,12 @@ async function main() {
       }),
     );
   }
+
+  // TODO: Wire spawn_cell tool — requires K8s client (e.g., @kubernetes/client-node)
+  // which is not yet available in the cell runtime. Defer until K8s client integration.
+
+  // TODO: Wire commit_file tool — requires shared/private workspace paths and
+  // fs bindings. Defer until workspace volume mounts are configured in the Pod spec.
 
   // Create and start runtime
   const runtime = new CellRuntime({

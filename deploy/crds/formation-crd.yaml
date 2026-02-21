@@ -1,0 +1,176 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: formations.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Formation
+    plural: formations
+    singular: formation
+    shortNames: ["fm"]
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                cells:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      replicas:
+                        type: integer
+                        default: 1
+                        minimum: 1
+                      spec:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        properties:
+                          mind:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
+                            properties:
+                              provider:
+                                type: string
+                                enum: ["anthropic", "openai", "ollama"]
+                              model:
+                                type: string
+                              systemPrompt:
+                                type: string
+                              temperature:
+                                type: number
+                              maxTokens:
+                                type: integer
+                            required: ["provider", "model", "systemPrompt"]
+                          tools:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                name:
+                                  type: string
+                                config:
+                                  type: object
+                                  x-kubernetes-preserve-unknown-fields: true
+                          resources:
+                            type: object
+                            properties:
+                              maxTokensPerTurn:
+                                type: integer
+                              maxCostPerHour:
+                                type: number
+                              maxTotalCost:
+                                type: number
+                              cpuLimit:
+                                type: string
+                              memoryLimit:
+                                type: string
+                        required: ["mind"]
+                    required: ["name", "spec"]
+                topology:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                      enum: ["full_mesh", "hierarchy", "star", "ring", "stigmergy", "custom"]
+                    root:
+                      type: string
+                    hub:
+                      type: string
+                    routes:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          from:
+                            type: string
+                          to:
+                            type: array
+                            items:
+                              type: string
+                          protocol:
+                            type: string
+                        required: ["from", "to"]
+                    broadcast:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        from:
+                          type: array
+                          items:
+                            type: string
+                      required: ["enabled", "from"]
+                    blackboard:
+                      type: object
+                      properties:
+                        decayMinutes:
+                          type: number
+                      required: ["decayMinutes"]
+                  required: ["type"]
+                budget:
+                  type: object
+                  properties:
+                    maxTotalCost:
+                      type: number
+                    maxCostPerHour:
+                      type: number
+                    allocation:
+                      type: object
+                      additionalProperties:
+                        type: string
+              required: ["cells", "topology"]
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Paused", "Completed", "Failed"]
+                readyCells:
+                  type: integer
+                totalCells:
+                  type: integer
+                totalCost:
+                  type: number
+                cells:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      phase:
+                        type: string
+                      cost:
+                        type: number
+                    required: ["name", "phase", "cost"]
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Cells
+          type: integer
+          jsonPath: .status.totalCells
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyCells
+        - name: Cost
+          type: string
+          jsonPath: .status.totalCost
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

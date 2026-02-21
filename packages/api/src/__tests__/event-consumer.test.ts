@@ -127,12 +127,13 @@ describe('EventConsumer', () => {
   it('inserts events into cell_events table', async () => {
     await consumer.start();
 
+    const eventPayload = { inputTokens: 100, outputTokens: 50, totalTokens: 150, cost: 0.001 };
     const event = {
       type: 'response',
       cellName: 'researcher',
       namespace: 'default',
       timestamp: '2025-01-15T10:30:00Z',
-      usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150, cost: 0.001 },
+      payload: eventPayload,
     };
 
     nats.subscriptions[0]!.push({ data: encodeEvent(event) });
@@ -146,7 +147,7 @@ describe('EventConsumer', () => {
       'researcher',
       'default',
       'response',
-      JSON.stringify(event),
+      JSON.stringify(eventPayload),
     ]);
   });
 

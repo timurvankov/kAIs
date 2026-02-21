@@ -1,0 +1,166 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: missions.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Mission
+    plural: missions
+    singular: mission
+    shortNames: ["ms"]
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                # At least one of formationRef or cellRef is required.
+                # This constraint is enforced by the operator, not the CRD schema,
+                # because OpenAPI v3 validation in CRDs does not support cross-field
+                # conditional requirements (oneOf/anyOf on required fields).
+                formationRef:
+                  type: string
+                cellRef:
+                  type: string
+                objective:
+                  type: string
+                completion:
+                  type: object
+                  properties:
+                    checks:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          type:
+                            type: string
+                            enum: ["fileExists", "command", "coverage", "natsResponse"]
+                          paths:
+                            type: array
+                            items:
+                              type: string
+                          command:
+                            type: string
+                          successPattern:
+                            type: string
+                          failPattern:
+                            type: string
+                          jsonPath:
+                            type: string
+                          operator:
+                            type: string
+                          value:
+                            type: number
+                          subject:
+                            type: string
+                          timeoutSeconds:
+                            type: integer
+                            minimum: 1
+                        required: ["name", "type"]
+                    review:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                        reviewer:
+                          type: string
+                        criteria:
+                          type: string
+                      required: ["enabled", "reviewer", "criteria"]
+                    maxAttempts:
+                      type: integer
+                      default: 3
+                      minimum: 1
+                    timeout:
+                      type: string
+                  required: ["checks", "maxAttempts", "timeout"]
+                entrypoint:
+                  type: object
+                  properties:
+                    cell:
+                      type: string
+                    message:
+                      type: string
+                  required: ["cell", "message"]
+                budget:
+                  type: object
+                  properties:
+                    maxCost:
+                      type: number
+                  required: ["maxCost"]
+              required: ["objective", "completion", "entrypoint"]
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Pending", "Running", "Succeeded", "Failed"]
+                attempt:
+                  type: integer
+                startedAt:
+                  type: string
+                  format: date-time
+                cost:
+                  type: number
+                checks:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["Pending", "Passed", "Failed", "Error"]
+                    required: ["name", "status"]
+                review:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: ["Pending", "Approved", "Rejected"]
+                    feedback:
+                      type: string
+                  required: ["status"]
+                history:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      attempt:
+                        type: integer
+                      startedAt:
+                        type: string
+                        format: date-time
+                      result:
+                        type: string
+                    required: ["attempt", "startedAt", "result"]
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Attempt
+          type: integer
+          jsonPath: .status.attempt
+        - name: Cost
+          type: string
+          jsonPath: .status.cost
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+        - name: Timeout
+          type: string
+          jsonPath: .spec.completion.timeout

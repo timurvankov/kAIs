@@ -4,6 +4,7 @@ import { createSendMessageTool } from '../tools/send-message.js';
 import { createReadFileTool } from '../tools/read-file.js';
 import { createWriteFileTool } from '../tools/write-file.js';
 import { createBashTool } from '../tools/bash.js';
+import type { TopologyEnforcer } from '../topology/topology-enforcer.js';
 import { MockNatsConnection, MockFileSystem, MockCommandExecutor } from './helpers.js';
 
 describe('send_message tool', () => {
@@ -59,6 +60,75 @@ describe('send_message tool', () => {
     await expect(tool.execute({ to: 123, message: true })).rejects.toThrow();
     // undefined input
     await expect(tool.execute(undefined)).rejects.toThrow();
+  });
+
+  describe('with topology enforcement', () => {
+    function makeEnforcer(allowed: string[]): TopologyEnforcer {
+      return {
+        canSendTo(target: string): boolean {
+          return allowed.includes(target);
+        },
+        getAllowedTargets(): string[] {
+          return [...allowed];
+        },
+      };
+    }
+
+    it('allows messages to permitted targets', async () => {
+      const enforcer = makeEnforcer(['receiver-cell', 'other-cell']);
+      const tool = createSendMessageTool({
+        cellName: 'sender',
+        namespace: 'default',
+        nats,
+        topologyEnforcer: enforcer,
+      });
+
+      const result = await tool.execute({ to: 'receiver-cell', message: 'Hello!' });
+      expect(result).toBe('Message sent to receiver-cell');
+      expect(nats.published).toHaveLength(1);
+    });
+
+    it('throws on topology violation with descriptive error', async () => {
+      const enforcer = makeEnforcer(['allowed-cell']);
+      const tool = createSendMessageTool({
+        cellName: 'sender',
+        namespace: 'default',
+        nats,
+        topologyEnforcer: enforcer,
+      });
+
+      await expect(tool.execute({ to: 'blocked-cell', message: 'Hello!' })).rejects.toThrow(
+        'Topology violation: sender cannot send messages to blocked-cell. Allowed targets: [allowed-cell]',
+      );
+      // No message should have been published
+      expect(nats.published).toHaveLength(0);
+    });
+
+    it('includes multiple allowed targets in error message', async () => {
+      const enforcer = makeEnforcer(['cell-a', 'cell-b']);
+      const tool = createSendMessageTool({
+        cellName: 'my-cell',
+        namespace: 'default',
+        nats,
+        topologyEnforcer: enforcer,
+      });
+
+      await expect(tool.execute({ to: 'cell-c', message: 'test' })).rejects.toThrow(
+        'Allowed targets: [cell-a, cell-b]',
+      );
+    });
+
+    it('works normally without topology enforcer', async () => {
+      const tool = createSendMessageTool({
+        cellName: 'sender',
+        namespace: 'default',
+        nats,
+        // no topologyEnforcer
+      });
+
+      const result = await tool.execute({ to: 'any-cell', message: 'Hello!' });
+      expect(result).toBe('Message sent to any-cell');
+    });
   });
 });
 

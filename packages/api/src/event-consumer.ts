@@ -70,9 +70,10 @@ export class EventConsumer {
             continue;
           }
 
+          const eventPayload = payload.payload ?? {};
           await this.db.query(
             'INSERT INTO cell_events (cell_name, namespace, event_type, payload) VALUES ($1, $2, $3, $4)',
-            [cellName, namespace ?? 'default', eventType, JSON.stringify(payload)],
+            [cellName, namespace ?? 'default', eventType, JSON.stringify(eventPayload)],
           );
         } catch (err) {
           console.error('[EventConsumer] failed to process event:', err);

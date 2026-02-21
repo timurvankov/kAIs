@@ -2,7 +2,7 @@
 
 **Goal:** Система оптимизирует себя. Генетические алгоритмы на Blueprint'ах — мутация, скрещивание, selection. Автоматическое масштабирование Cell'ов по нагрузке.
 
-**Depends on:** Phase 5 (Instinct, Ritual, Observability)
+**Depends on:** Phase 5 (Instinct, Ritual)
 
 **Duration estimate:** 2–3 weeks
 

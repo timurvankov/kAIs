@@ -1,0 +1,31 @@
+# Formation: ring topology for consensus
+# Each cell passes its analysis to the next, building on previous work.
+# Useful for iterative refinement, peer review, or round-robin processing.
+apiVersion: kais.io/v1
+kind: Formation
+metadata:
+  name: review-ring
+  namespace: demo
+spec:
+  cells:
+    - name: analyst
+      replicas: 4
+      spec:
+        mind:
+          provider: ollama
+          model: qwen2.5:7b
+          systemPrompt: |
+            You are a code analyst in a review ring. You will receive
+            code and previous reviewers' comments. Add your own analysis,
+            then pass everything to the next reviewer.
+          temperature: 0.5
+        tools:
+          - name: send_message
+          - name: read_file
+        resources:
+          maxTokensPerTurn: 2048
+          maxCostPerHour: 0
+          memoryLimit: 512Mi
+
+  topology:
+    type: ring

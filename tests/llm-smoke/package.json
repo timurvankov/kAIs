@@ -1,0 +1,15 @@
+{
+  "name": "@kais/test-llm-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kais/mind": "workspace:*",
+    "@kais/core": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}

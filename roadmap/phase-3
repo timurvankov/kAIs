@@ -1,6 +1,6 @@
-# kAIs — Phase 3: Experiment Engine + Protocols + In-Process Mode
+# kAIs — Phase 3: Experiment Engine + Protocols + In-Process Mode + Observability
 
-**Goal:** Научная платформа для экспериментов с multi-agent системами. Запускать варианты, собирать метрики, сравнивать статистически. Плюс формальные протоколы взаимодействия и быстрый in-process режим для массовых прогонов.
+**Goal:** Научная платформа для экспериментов с multi-agent системами. Запускать варианты, собирать метрики, сравнивать статистически. Плюс формальные протоколы взаимодействия, быстрый in-process режим для массовых прогонов и полная observability — traces, метрики, дашборды.
 
 **Depends on:** Phase 2 (Formation, Mission, Topology)
 
@@ -16,12 +16,13 @@ Phase 1–2 дают production: запустил команду, дал зад�
 - 3 developer'а или 5 — что эффективнее по cost/quality?
 - Claude Sonnet vs Qwen 32B для роли reviewer — разница значима?
 - Contract protocol vs свободная коммуникация — что быстрее?
+- Почему natsResponse check не проходит — что именно происходит между Cell'ами?
 
-Phase 3 превращает kAIs из инструмента в **исследовательскую платформу**.
+Phase 3 превращает kAIs из инструмента в **исследовательскую платформу** с полной observability для отладки и анализа.
 
 ---
 
-## Three pillars
+## Four pillars
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -36,6 +37,10 @@ Phase 3 превращает kAIs из инструмента в **исслед�
 │            In-Process Runtime                    │
 │  worker_threads instead of Pods                  │
 │  1000 Cells on laptop, spawn in ms              │
+├─────────────────────────────────────────────────┤
+│            Observability Stack                   │
+│  OTel traces + Prometheus metrics + Grafana      │
+│  Distributed tracing across Cells via NATS       │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -916,6 +921,315 @@ Experiment: topology-comparison (18 runs, 17 succeeded, 1 failed)
 
 ---
 
+## 3.6 — Observability Stack
+
+Moved forward from Phase 5. Без observability невозможно отлаживать distributed системы — мы убедились в этом уже на Phase 2 (natsResponse checks, NATS JetStream, inter-cell communication). Observability нужна до экспериментов, а не после.
+
+### OpenTelemetry integration
+
+Every Cell emits structured traces:
+
+```typescript
+// In cell-runtime
+import { trace, SpanKind, context } from '@opentelemetry/api'
+
+const tracer = trace.getTracer('kais-cell')
+
+async function handleMessage(message: Envelope) {
+  // Root span for entire message handling
+  const span = tracer.startSpan('cell.handle_message', {
+    kind: SpanKind.SERVER,
+    attributes: {
+      'cell.name': this.name,
+      'cell.formation': this.formation,
+      'message.type': message.type,
+      'message.from': message.from,
+    }
+  })
+
+  return context.with(trace.setSpan(context.active(), span), async () => {
+    try {
+      // LLM call span
+      const llmSpan = tracer.startSpan('cell.llm_call', {
+        attributes: {
+          'llm.provider': this.mind.provider,
+          'llm.model': this.mind.model,
+        }
+      })
+      const result = await this.mind.think(input)
+      llmSpan.setAttributes({
+        'llm.input_tokens': result.usage.inputTokens,
+        'llm.output_tokens': result.usage.outputTokens,
+        'llm.cost': result.usage.cost,
+        'llm.latency_ms': result.latencyMs,
+      })
+      llmSpan.end()
+
+      // Tool call spans
+      for (const toolCall of result.toolCalls ?? []) {
+        const toolSpan = tracer.startSpan('cell.tool_call', {
+          attributes: {
+            'tool.name': toolCall.name,
+            'tool.input_size': JSON.stringify(toolCall.input).length,
+          }
+        })
+        const toolResult = await this.executeTool(toolCall)
+        toolSpan.end()
+      }
+
+      span.setStatus({ code: SpanStatusCode.OK })
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: err.message })
+      span.recordException(err)
+    } finally {
+      span.end()
+    }
+  })
+}
+```
+
+### Trace propagation across Cells
+
+When Cell A sends message to Cell B, trace context propagates via NATS headers:
+
+```typescript
+// Sender
+async function sendMessage(to: string, content: string) {
+  const headers = {}
+  propagation.inject(context.active(), headers)  // inject trace context
+
+  await nats.publish(`cell.${namespace}.${to}.inbox`, {
+    content,
+    from: this.name,
+    traceHeaders: headers,   // propagated
+  })
+}
+
+// Receiver
+async function onMessage(message: Envelope) {
+  const parentContext = propagation.extract(context.active(), message.traceHeaders)
+
+  // New span linked to sender's trace
+  const span = tracer.startSpan('cell.handle_message', {
+    kind: SpanKind.SERVER,
+    links: [{ context: parentContext }],
+  })
+  // ...
+}
+```
+
+Result: distributed trace across entire Mission — from architect's first planning thought through developer's code writing to reviewer's feedback.
+
+### Metrics
+
+```typescript
+import { metrics } from '@opentelemetry/api'
+
+const meter = metrics.getMeter('kais-cell')
+
+// Counters
+const llmCallsCounter = meter.createCounter('kais.cell.llm_calls', {
+  description: 'Total LLM calls',
+})
+const tokenCounter = meter.createCounter('kais.cell.tokens', {
+  description: 'Total tokens consumed',
+})
+const costCounter = meter.createCounter('kais.cell.cost', {
+  description: 'Total LLM cost in USD',
+})
+const messageCounter = meter.createCounter('kais.cell.messages', {
+  description: 'Messages sent/received',
+})
+
+// Histograms
+const llmLatency = meter.createHistogram('kais.cell.llm_latency_ms', {
+  description: 'LLM call latency',
+  boundaries: [500, 1000, 2000, 5000, 10000, 30000],
+})
+const toolLatency = meter.createHistogram('kais.cell.tool_latency_ms', {
+  description: 'Tool execution latency',
+})
+
+// Gauges
+const activeCells = meter.createObservableGauge('kais.platform.active_cells', {
+  description: 'Currently running cells',
+})
+const budgetRemaining = meter.createObservableGauge('kais.cell.budget_remaining', {
+  description: 'Remaining budget per cell',
+})
+```
+
+### Collector + backends
+
+```yaml
+# Added to helmfile.yaml
+
+  - name: otel-collector
+    namespace: kais-system
+    chart: open-telemetry/opentelemetry-collector
+    values:
+      - mode: deployment
+        config:
+          receivers:
+            otlp:
+              protocols:
+                grpc: { endpoint: 0.0.0.0:4317 }
+                http: { endpoint: 0.0.0.0:4318 }
+
+          processors:
+            batch:
+              timeout: 5s
+              send_batch_size: 1024
+
+          exporters:
+            # Traces → Jaeger (or Tempo)
+            otlp/jaeger:
+              endpoint: jaeger.kais-system:4317
+              tls: { insecure: true }
+
+            # Metrics → Prometheus
+            prometheus:
+              endpoint: 0.0.0.0:8889
+
+          service:
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [otlp/jaeger]
+              metrics:
+                receivers: [otlp]
+                processors: [batch]
+                exporters: [prometheus]
+
+  - name: jaeger
+    namespace: kais-system
+    chart: jaegertracing/jaeger
+    values:
+      - collector:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        query:
+          resources:
+            requests: { memory: 128Mi, cpu: 100m }
+        storage:
+          type: badger          # embedded, no external deps for minikube
+
+  - name: prometheus
+    namespace: kais-system
+    chart: prometheus-community/prometheus
+    values:
+      - server:
+          resources:
+            requests: { memory: 256Mi, cpu: 250m }
+          retention: 15d
+          persistentVolume:
+            size: 5Gi
+        serverFiles:
+          prometheus.yml:
+            scrape_configs:
+              - job_name: otel-collector
+                static_configs:
+                  - targets: ['otel-collector.kais-system:8889']
+              - job_name: kais-operator
+                static_configs:
+                  - targets: ['kais-operator.kais-system:9090']
+
+  - name: grafana
+    namespace: kais-system
+    chart: grafana/grafana
+    values:
+      - adminPassword: kais
+        resources:
+          requests: { memory: 128Mi, cpu: 100m }
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Prometheus
+                type: prometheus
+                url: http://prometheus-server.kais-system
+                isDefault: true
+              - name: Jaeger
+                type: jaeger
+                url: http://jaeger-query.kais-system:16686
+```
+
+### Pre-built Grafana dashboards
+
+kAIs ships with dashboards as ConfigMaps:
+
+**Dashboard: Platform Overview**
+```
+┌──────────────────────────────────────────────────────┐
+│  Active Cells: 12    Formations: 3    Missions: 1    │
+│  Total Cost Today: $14.23    Budget Remaining: $85.77│
+├──────────────────┬───────────────────────────────────┤
+│ LLM Calls/min    │  Cost by Provider                 │
+│  ▁▃▅▇▆▅▃▅▇█▆▄  │  Anthropic: $12.10 (85%)          │
+│                  │  Ollama: $0.00 (0%)                │
+│                  │  (local models free)               │
+├──────────────────┼───────────────────────────────────┤
+│ Token Usage      │  Mission Success Rate              │
+│  Input:  234K    │  ████████████░░ 85% (7d avg)      │
+│  Output:  45K    │                                    │
+│  Cached: 180K    │  Last 5 missions:                  │
+│  (77% cache hit) │  ✓ ✓ ✗ ✓ ✓                        │
+├──────────────────┴───────────────────────────────────┤
+│ Cell Health                                           │
+│  architect-0   ● Running  $4.23  1.2K tokens/min     │
+│  developer-0   ● Running  $1.87  0.8K tokens/min     │
+│  developer-1   ● Running  $2.01  0.9K tokens/min     │
+│  reviewer-0    ● Idle     $0.45  waiting              │
+│  monitor       ● Running  $0.12  0.1K tokens/min     │
+└──────────────────────────────────────────────────────┘
+```
+
+**Dashboard: Mission Trace**
+```
+┌──────────────────────────────────────────────────────┐
+│ Mission: implement-auth-module                        │
+│ Duration: 4m36s  Cost: $3.42  Status: ✓ Succeeded    │
+├──────────────────────────────────────────────────────┤
+│ Timeline (Gantt)                                      │
+│                                                       │
+│ architect-0  ██████░░░░░░░░░░░░░░░░░░░░░░░ planning  │
+│              ░░░░░░██░░░░░░░░░░░░░░░░░░░░░ delegate  │
+│              ░░░░░░░░░░░░░░░░░░░░░░████░░░ review    │
+│              ░░░░░░░░░░░░░░░░░░░░░░░░░░██ finalize   │
+│ developer-0  ░░░░░░░░████████████░░░░░░░░░ coding    │
+│ developer-1  ░░░░░░░░░████████████░░░░░░░░ coding    │
+│ reviewer-0   ░░░░░░░░░░░░░░░░░░░░██░░░░░░ reviewing │
+│                                                       │
+│ 0m     1m     2m     3m     4m     5m                │
+├──────────────────────────────────────────────────────┤
+│ Message Flow                                          │
+│ architect-0 ──task──→ developer-0                     │
+│ architect-0 ──task──→ developer-1                     │
+│ developer-0 ──done──→ architect-0   (2m12s)           │
+│ developer-1 ──done──→ architect-0   (2m45s)           │
+│ architect-0 ──review→ reviewer-0                      │
+│ reviewer-0  ──pass──→ architect-0   (45s)             │
+├──────────────────────────────────────────────────────┤
+│ Cost Breakdown                                        │
+│ architect-0:  $1.24 (36%) ████████████░░░░░░░░░░░░   │
+│ developer-0:  $0.87 (25%) ████████░░░░░░░░░░░░░░░░   │
+│ developer-1:  $0.91 (27%) █████████░░░░░░░░░░░░░░░   │
+│ reviewer-0:   $0.40 (12%) ████░░░░░░░░░░░░░░░░░░░░   │
+└──────────────────────────────────────────────────────┘
+```
+
+### New CLI commands (observability)
+
+```bash
+kais trace mission implement-auth-module       # open Jaeger trace
+kais metrics                                   # summary of key metrics
+kais dashboard                                 # open Grafana in browser
+kais logs --trace-id abc-123                   # logs correlated by trace
+```
+
+---
+
 ## What Phase 3 does NOT include
 
 | Feature | Phase |
@@ -923,10 +1237,25 @@ Experiment: topology-comparison (18 runs, 17 succeeded, 1 failed)
 | Knowledge graph (cross-experiment learning) | 4 |
 | Blueprint templates | 4 |
 | Blueprint evolution (genetic algorithms) | 6 |
-| ClickHouse for traces (Postgres sufficient initially) | 5+ |
+| ClickHouse for traces (Postgres sufficient initially) | 7+ |
 | Distributed experiment runner (multi-node) | 7+ |
 | Web dashboard for experiment visualization | 7 |
 | Auto-suggest experiment variables | 8+ |
+
+---
+
+## Resource requirements update
+
+| Component | CPU request | Memory request | Notes |
+|-----------|-------------|----------------|-------|
+| Previous (Phase 1–2) | ~800m | ~768Mi | Base system |
+| OTel Collector | 100m | 128Mi | Receives and forwards telemetry |
+| Jaeger | 100m | 128Mi | Trace storage + query (badger) |
+| Prometheus | 250m | 256Mi | Metrics storage + query |
+| Grafana | 100m | 128Mi | Dashboards |
+| **Phase 3 total (base)** | **~1350m** | **~1408Mi** | ~1.5 cores, ~1.5GB |
+
+Recommendation: `minikube start --cpus=4 --memory=10g` (unchanged from Phase 2).
 
 ---
 
@@ -938,7 +1267,10 @@ Additive changes only:
 - 1 new container image: kais-experiment-runner
 - Protocol system added to cell-runtime (backwards compatible — no protocol = free-form)
 - InProcessRuntime added alongside existing KubernetesRuntime
+- OpenTelemetry SDK added to cell-runtime and operator
+- 4 new infrastructure components: OTel Collector, Jaeger, Prometheus, Grafana
+- Pre-built Grafana dashboards as ConfigMaps
 - New DB tables (no changes to existing)
 - New CLI commands
 
-All Phase 1–2 functionality unchanged.
+All Phase 1–2 functionality unchanged. Existing Cell'ы start emitting traces automatically after cell-runtime upgrade.

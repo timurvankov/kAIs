@@ -4,6 +4,7 @@
 import { createEnvelope } from '@kais/core';
 import { z } from 'zod';
 
+import type { TopologyEnforcer } from '../topology/topology-enforcer.js';
 import type { Tool } from './tool-executor.js';
 
 export interface NatsPublisher {
@@ -14,6 +15,7 @@ export interface SendMessageConfig {
   cellName: string;
   namespace: string;
   nats: NatsPublisher;
+  topologyEnforcer?: TopologyEnforcer;
 }
 
 export function createSendMessageTool(config: SendMessageConfig): Tool {
@@ -34,6 +36,14 @@ export function createSendMessageTool(config: SendMessageConfig): Tool {
         message: z.string().min(1, '"message" must be a non-empty string'),
       });
       const { to, message } = SendMessageInput.parse(input);
+
+      // Topology enforcement: check if this cell is allowed to send to the target
+      if (config.topologyEnforcer && !config.topologyEnforcer.canSendTo(to)) {
+        const allowed = config.topologyEnforcer.getAllowedTargets();
+        throw new Error(
+          `Topology violation: ${config.cellName} cannot send messages to ${to}. Allowed targets: [${allowed.join(', ')}]`,
+        );
+      }
 
       const envelope = createEnvelope({
         from: config.cellName,
