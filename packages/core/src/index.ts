@@ -177,6 +177,10 @@ export type {
   Subscription,
 } from './runtime.js';
 
+// Knowledge store
+export { InMemoryKnowledgeStore } from './knowledge.js';
+export type { KnowledgeStore, ScopedKnowledgeStore, AddFactInput } from './knowledge.js';
+
 // Protocol system
 export {
   ProtocolSession,
