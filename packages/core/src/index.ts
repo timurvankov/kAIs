@@ -69,6 +69,43 @@ export {
   BlueprintSpecSchema,
   BlueprintVersionSchema,
   BlueprintStatusSchema,
+  // Phase 6: Evolution
+  EvolutionSelectionSchema,
+  EvolutionCrossoverSchema,
+  EvolutionMutationSchema,
+  EvolutionStoppingSchema,
+  EvolutionSpecSchema,
+  EvolutionPhaseSchema,
+  EvolutionIndividualSchema,
+  EvolutionStatusSchema,
+  // Phase 6: Swarm
+  SwarmTriggerTypeSchema,
+  SwarmTriggerSchema,
+  SwarmScalingSchema,
+  SwarmSpecSchema,
+  SwarmPhaseSchema,
+  SwarmStatusSchema,
+  // Phase 6: Adaptation
+  CollectiveImmunityEntrySchema,
+  NeuroplasticityEntrySchema,
+  EpigeneticConfigSchema,
+  TopologyAdaptationRuleSchema,
+  // Phase 9: Channel
+  ChannelSpecSchema,
+  ChannelPhaseSchema,
+  ChannelStatusSchema,
+  // Phase 9: Federation
+  FederationClusterSchema,
+  FederationSchedulingSchema,
+  FederationSpecSchema,
+  FederationPhaseSchema,
+  FederationStatusSchema,
+  // Phase 9: HumanCell
+  HumanCellSpecSchema,
+  // Phase 9: Marketplace
+  MarketplaceBlueprintSchema,
+  // Phase 9: A2A
+  A2AAgentCardSchema,
 } from './schemas.js';
 
 // TypeScript types (inferred from Zod)
@@ -142,6 +179,37 @@ export type {
   BlueprintSpec,
   BlueprintVersion,
   BlueprintStatus,
+  // Phase 6
+  EvolutionSelection,
+  EvolutionCrossover,
+  EvolutionMutation,
+  EvolutionStopping,
+  EvolutionSpec,
+  EvolutionPhase,
+  EvolutionIndividual,
+  EvolutionStatus,
+  SwarmTriggerType,
+  SwarmTrigger,
+  SwarmScaling,
+  SwarmSpec,
+  SwarmPhase,
+  SwarmStatus,
+  CollectiveImmunityEntry,
+  NeuroplasticityEntry,
+  EpigeneticConfig,
+  TopologyAdaptationRule,
+  // Phase 9
+  ChannelSpec,
+  ChannelPhase,
+  ChannelStatus,
+  FederationCluster,
+  FederationScheduling,
+  FederationSpec,
+  FederationPhase,
+  FederationStatus,
+  HumanCellSpec,
+  MarketplaceBlueprint,
+  A2AAgentCard,
 } from './types.js';
 
 // Error model
@@ -282,3 +350,16 @@ export type {
   NatsCredentials,
   NatsPermission,
 } from './nats-auth-types.js';
+
+// Phase 6: Adaptation systems
+export { CollectiveImmunityStore } from './collective-immunity.js';
+export { NeuroplasticityTracker } from './neuroplasticity.js';
+export { TopologyAdapter } from './topology-adaptation.js';
+export { EpigeneticLayer } from './epigenetic.js';
+
+// Phase 9: Services
+export { HumanCellRuntime } from './human-cell.js';
+export type { PendingMessage, HumanNotification } from './human-cell.js';
+export { Marketplace } from './marketplace.js';
+export { A2AGateway } from './a2a-gateway.js';
+export type { A2ATask } from './a2a-gateway.js';

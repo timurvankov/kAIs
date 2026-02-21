@@ -1191,5 +1191,276 @@ export function createProgram(): Command {
         }),
     );
 
+  // ========== Phase 6: Evolution commands ==========
+
+  const evolution = program.command('evolution').description('Manage genetic evolution runs');
+
+  evolution
+    .command('list')
+    .description('List all evolutions')
+    .action(() => {
+      const result = execFileSync('kubectl', ['get', 'evolutions', '-o', 'wide'], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  evolution
+    .command('describe <name>')
+    .description('Describe an evolution')
+    .action((name: string) => {
+      const result = execFileSync('kubectl', ['describe', 'evolution', name], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  evolution
+    .command('status <name>')
+    .description('Show evolution status')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (name: string, opts: { apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const cr = JSON.parse(
+        execFileSync('kubectl', ['get', 'evolution', name, '-o', 'json'], { encoding: 'utf-8' }),
+      ) as { status?: { phase: string; generation: number; bestFitness?: number; totalCost: number; geneImportance?: Record<string, number> } };
+      const s = cr.status;
+      if (!s) { console.log('No status yet'); return; }
+      console.log(`Phase:          ${s.phase}`);
+      console.log(`Generation:     ${s.generation}`);
+      console.log(`Best Fitness:   ${s.bestFitness ?? 'N/A'}`);
+      console.log(`Total Cost:     $${s.totalCost.toFixed(4)}`);
+      if (s.geneImportance) {
+        console.log('\nGene Importance:');
+        for (const [gene, imp] of Object.entries(s.geneImportance)) {
+          const bar = '█'.repeat(Math.round(imp * 20));
+          console.log(`  ${gene.padEnd(20)} ${bar} ${(imp * 100).toFixed(1)}%`);
+        }
+      }
+    });
+
+  evolution
+    .command('abort <name>')
+    .description('Abort a running evolution')
+    .action((name: string) => {
+      execFileSync('kubectl', ['patch', 'evolution', name, '--type=merge', '-p', '{"status":{"phase":"Aborted"}}', '--subresource=status'], { encoding: 'utf-8' });
+      console.log(`Evolution ${name} aborted.`);
+    });
+
+  // ========== Phase 6: Swarm commands ==========
+
+  const swarm = program.command('swarm').description('Manage swarm autoscalers');
+
+  swarm
+    .command('list')
+    .description('List all swarms')
+    .action(() => {
+      const result = execFileSync('kubectl', ['get', 'swarms', '-o', 'wide'], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  swarm
+    .command('describe <name>')
+    .description('Describe a swarm')
+    .action((name: string) => {
+      const result = execFileSync('kubectl', ['describe', 'swarm', name], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  swarm
+    .command('status <name>')
+    .description('Show swarm autoscaler status')
+    .action((name: string) => {
+      const cr = JSON.parse(
+        execFileSync('kubectl', ['get', 'swarm', name, '-o', 'json'], { encoding: 'utf-8' }),
+      ) as { status?: { phase: string; currentReplicas: number; desiredReplicas: number; lastScaleTime?: string; lastTriggerValue?: number } };
+      const s = cr.status;
+      if (!s) { console.log('No status yet'); return; }
+      console.log(`Phase:           ${s.phase}`);
+      console.log(`Current/Desired: ${s.currentReplicas}/${s.desiredReplicas}`);
+      if (s.lastTriggerValue !== undefined) console.log(`Last Trigger:    ${s.lastTriggerValue}`);
+      if (s.lastScaleTime) console.log(`Last Scale:      ${new Date(s.lastScaleTime).toLocaleString()}`);
+    });
+
+  swarm
+    .command('pause <name>')
+    .description('Suspend a swarm autoscaler')
+    .action((name: string) => {
+      execFileSync('kubectl', ['patch', 'swarm', name, '--type=merge', '-p', '{"status":{"phase":"Suspended"}}', '--subresource=status'], { encoding: 'utf-8' });
+      console.log(`Swarm ${name} suspended.`);
+    });
+
+  swarm
+    .command('resume <name>')
+    .description('Resume a suspended swarm')
+    .action((name: string) => {
+      execFileSync('kubectl', ['patch', 'swarm', name, '--type=merge', '-p', '{"status":{"phase":"Active"}}', '--subresource=status'], { encoding: 'utf-8' });
+      console.log(`Swarm ${name} resumed.`);
+    });
+
+  // ========== Phase 9: Federation commands ==========
+
+  const federation = program.command('federation').description('Manage multi-cluster federation');
+
+  federation
+    .command('list')
+    .description('List federation resources')
+    .action(() => {
+      const result = execFileSync('kubectl', ['get', 'federations', '-o', 'wide'], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  federation
+    .command('describe <name>')
+    .description('Describe a federation')
+    .action((name: string) => {
+      const result = execFileSync('kubectl', ['describe', 'federation', name], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  federation
+    .command('status <name>')
+    .description('Show federation cluster status')
+    .action((name: string) => {
+      const cr = JSON.parse(
+        execFileSync('kubectl', ['get', 'federation', name, '-o', 'json'], { encoding: 'utf-8' }),
+      ) as { status?: { phase: string; readyClusters: number; totalClusters: number; scheduledCells: number } };
+      const s = cr.status;
+      if (!s) { console.log('No status yet'); return; }
+      console.log(`Phase:            ${s.phase}`);
+      console.log(`Clusters:         ${s.readyClusters}/${s.totalClusters} ready`);
+      console.log(`Scheduled Cells:  ${s.scheduledCells}`);
+    });
+
+  // ========== Phase 9: Channel commands ==========
+
+  const channel = program.command('channel').description('Manage cross-formation channels');
+
+  channel
+    .command('list')
+    .description('List channels')
+    .action(() => {
+      const result = execFileSync('kubectl', ['get', 'channels', '-o', 'wide'], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  channel
+    .command('describe <name>')
+    .description('Describe a channel')
+    .action((name: string) => {
+      const result = execFileSync('kubectl', ['describe', 'channel', name], { encoding: 'utf-8' });
+      console.log(result);
+    });
+
+  // ========== Phase 9: Human inbox commands ==========
+
+  program
+    .command('inbox')
+    .description('View human-cell pending messages')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (opts: { apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const res = await fetch(`${apiUrl}/api/v1/human/inbox`);
+      if (!res.ok) {
+        console.error(`Error: ${res.status}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = await res.json() as { messages: Array<{ id: string; from: string; content: string; receivedAt: string }> };
+      if (data.messages.length === 0) {
+        console.log('No pending messages.');
+        return;
+      }
+      console.log('ID'.padEnd(10) + 'From'.padEnd(16) + 'Received'.padEnd(22) + 'Content');
+      console.log('-'.repeat(70));
+      for (const m of data.messages) {
+        const time = new Date(m.receivedAt).toLocaleString();
+        console.log(`${m.id.padEnd(10)}${m.from.padEnd(16)}${time.padEnd(22)}${m.content.slice(0, 40)}`);
+      }
+    });
+
+  // ========== Phase 9: Marketplace commands ==========
+
+  const marketplace = program.command('marketplace').description('Browse and install blueprints');
+
+  marketplace
+    .command('search <query>')
+    .description('Search the marketplace')
+    .option('--tags <tags>', 'Comma-separated tag filter')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (query: string, opts: { tags?: string; apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const params = new URLSearchParams({ q: query });
+      if (opts.tags) params.set('tags', opts.tags);
+      const res = await fetch(`${apiUrl}/api/v1/marketplace/search?${params}`);
+      if (!res.ok) {
+        console.error(`Error: ${res.status}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = await res.json() as { blueprints: Array<{ name: string; version: string; description: string; rating?: number; downloads: number }> };
+      for (const bp of data.blueprints) {
+        const stars = bp.rating ? '★'.repeat(Math.round(bp.rating)) : 'unrated';
+        console.log(`  ${bp.name}@${bp.version}  ${stars}  ↓${bp.downloads}`);
+        console.log(`    ${bp.description}`);
+      }
+    });
+
+  marketplace
+    .command('install <name> <version>')
+    .description('Install a marketplace blueprint')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (name: string, version: string, opts: { apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const res = await fetch(`${apiUrl}/api/v1/marketplace/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, version }),
+      });
+      if (!res.ok) {
+        console.error(`Error: ${res.status}`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`Installed ${name}@${version}`);
+    });
+
+  // ========== Phase 9: A2A commands ==========
+
+  program
+    .command('agents')
+    .description('Manage external A2A agents')
+    .addCommand(
+      new Command('list')
+        .description('List connected A2A agents')
+        .option('--api-url <url>', 'API server URL')
+        .action(async (opts: { apiUrl?: string }) => {
+          const apiUrl = getApiUrl(opts);
+          const res = await fetch(`${apiUrl}/api/v1/a2a/agents`);
+          if (!res.ok) {
+            console.error(`Error: ${res.status}`);
+            process.exitCode = 1;
+            return;
+          }
+          const data = await res.json() as { agents: Array<{ name: string; url: string; skills: Array<{ name: string }> }> };
+          for (const a of data.agents) {
+            console.log(`  ${a.name} (${a.url})`);
+            console.log(`    Skills: ${a.skills.map(s => s.name).join(', ')}`);
+          }
+        }),
+    )
+    .addCommand(
+      new Command('card')
+        .description('Show this platform\'s A2A agent card')
+        .option('--api-url <url>', 'API server URL')
+        .action(async (opts: { apiUrl?: string }) => {
+          const apiUrl = getApiUrl(opts);
+          const res = await fetch(`${apiUrl}/.well-known/agent.json`);
+          if (!res.ok) {
+            console.error(`Error: ${res.status}`);
+            process.exitCode = 1;
+            return;
+          }
+          const card = await res.json();
+          console.log(JSON.stringify(card, null, 2));
+        }),
+    );
+
   return program;
 }

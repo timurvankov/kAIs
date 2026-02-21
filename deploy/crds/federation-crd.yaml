@@ -1,0 +1,41 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: federations.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Federation
+    plural: federations
+    singular: federation
+    shortNames: ["fed"]
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyClusters
+        - name: Total
+          type: integer
+          jsonPath: .status.totalClusters
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

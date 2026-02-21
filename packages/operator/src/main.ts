@@ -473,6 +473,12 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     async createKnowledgeGraphService() {},
     async deleteKnowledgeGraphPod() {},
     async deleteKnowledgeGraphService() {},
+
+    // Phase 6 + 9
+    async updateEvolutionStatus() {},
+    async updateSwarmStatus() {},
+    async updateChannelStatus() {},
+    async updateFederationStatus() {},
   };
 }
 

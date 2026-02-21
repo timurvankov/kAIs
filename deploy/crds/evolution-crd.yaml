@@ -1,0 +1,44 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: evolutions.kais.io
+spec:
+  group: kais.io
+  names:
+    kind: Evolution
+    plural: evolutions
+    singular: evolution
+    shortNames: ["evo"]
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Generation
+          type: integer
+          jsonPath: .status.generation
+        - name: Best Fitness
+          type: number
+          jsonPath: .status.bestFitness
+        - name: Cost
+          type: number
+          jsonPath: .status.totalCost
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

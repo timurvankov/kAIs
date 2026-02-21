@@ -5,6 +5,8 @@ export interface KnowledgeToolConfig {
   cellName: string;
   namespace: string;
   graphId?: string;
+  /** Ancestor cell IDs for tree-based knowledge visibility (root→...→parent). */
+  ancestorCellIds?: string[];
 }
 
 const SCOPE_MAP: Record<string, string> = {
@@ -46,6 +48,7 @@ export function createRecallTool(config: KnowledgeToolConfig): Tool {
           },
           max_results: 10,
           graph_id: config.graphId,
+          ancestor_cell_ids: config.ancestorCellIds,
         }),
       });
 

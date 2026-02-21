@@ -14,6 +14,10 @@ function makeMockKube() {
     createKnowledgeGraphService: vi.fn(),
     deleteKnowledgeGraphPod: vi.fn(),
     deleteKnowledgeGraphService: vi.fn(),
+    updateEvolutionStatus: vi.fn(),
+    updateSwarmStatus: vi.fn(),
+    updateChannelStatus: vi.fn(),
+    updateFederationStatus: vi.fn(),
   };
 }
 

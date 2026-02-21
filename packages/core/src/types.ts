@@ -67,6 +67,37 @@ import type {
   BlueprintSpecSchema,
   BlueprintVersionSchema,
   BlueprintStatusSchema,
+  // Phase 6
+  EvolutionSelectionSchema,
+  EvolutionCrossoverSchema,
+  EvolutionMutationSchema,
+  EvolutionStoppingSchema,
+  EvolutionSpecSchema,
+  EvolutionPhaseSchema,
+  EvolutionIndividualSchema,
+  EvolutionStatusSchema,
+  SwarmTriggerTypeSchema,
+  SwarmTriggerSchema,
+  SwarmScalingSchema,
+  SwarmSpecSchema,
+  SwarmPhaseSchema,
+  SwarmStatusSchema,
+  CollectiveImmunityEntrySchema,
+  NeuroplasticityEntrySchema,
+  EpigeneticConfigSchema,
+  TopologyAdaptationRuleSchema,
+  // Phase 9
+  ChannelSpecSchema,
+  ChannelPhaseSchema,
+  ChannelStatusSchema,
+  FederationClusterSchema,
+  FederationSchedulingSchema,
+  FederationSpecSchema,
+  FederationPhaseSchema,
+  FederationStatusSchema,
+  HumanCellSpecSchema,
+  MarketplaceBlueprintSchema,
+  A2AAgentCardSchema,
 } from './schemas.js';
 
 export type LocalBrain = z.infer<typeof LocalBrainSchema>;
@@ -147,3 +178,48 @@ export type BlueprintEvidence = z.infer<typeof BlueprintEvidenceSchema>;
 export type BlueprintSpec = z.infer<typeof BlueprintSpecSchema>;
 export type BlueprintVersion = z.infer<typeof BlueprintVersionSchema>;
 export type BlueprintStatus = z.infer<typeof BlueprintStatusSchema>;
+
+// Phase 6: Evolution types
+export type EvolutionSelection = z.infer<typeof EvolutionSelectionSchema>;
+export type EvolutionCrossover = z.infer<typeof EvolutionCrossoverSchema>;
+export type EvolutionMutation = z.infer<typeof EvolutionMutationSchema>;
+export type EvolutionStopping = z.infer<typeof EvolutionStoppingSchema>;
+export type EvolutionSpec = z.infer<typeof EvolutionSpecSchema>;
+export type EvolutionPhase = z.infer<typeof EvolutionPhaseSchema>;
+export type EvolutionIndividual = z.infer<typeof EvolutionIndividualSchema>;
+export type EvolutionStatus = z.infer<typeof EvolutionStatusSchema>;
+
+// Phase 6: Swarm types
+export type SwarmTriggerType = z.infer<typeof SwarmTriggerTypeSchema>;
+export type SwarmTrigger = z.infer<typeof SwarmTriggerSchema>;
+export type SwarmScaling = z.infer<typeof SwarmScalingSchema>;
+export type SwarmSpec = z.infer<typeof SwarmSpecSchema>;
+export type SwarmPhase = z.infer<typeof SwarmPhaseSchema>;
+export type SwarmStatus = z.infer<typeof SwarmStatusSchema>;
+
+// Phase 6: Adaptation types
+export type CollectiveImmunityEntry = z.infer<typeof CollectiveImmunityEntrySchema>;
+export type NeuroplasticityEntry = z.infer<typeof NeuroplasticityEntrySchema>;
+export type EpigeneticConfig = z.infer<typeof EpigeneticConfigSchema>;
+export type TopologyAdaptationRule = z.infer<typeof TopologyAdaptationRuleSchema>;
+
+// Phase 9: Channel types
+export type ChannelSpec = z.infer<typeof ChannelSpecSchema>;
+export type ChannelPhase = z.infer<typeof ChannelPhaseSchema>;
+export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
+
+// Phase 9: Federation types
+export type FederationCluster = z.infer<typeof FederationClusterSchema>;
+export type FederationScheduling = z.infer<typeof FederationSchedulingSchema>;
+export type FederationSpec = z.infer<typeof FederationSpecSchema>;
+export type FederationPhase = z.infer<typeof FederationPhaseSchema>;
+export type FederationStatus = z.infer<typeof FederationStatusSchema>;
+
+// Phase 9: HumanCell types
+export type HumanCellSpec = z.infer<typeof HumanCellSpecSchema>;
+
+// Phase 9: Marketplace types
+export type MarketplaceBlueprint = z.infer<typeof MarketplaceBlueprintSchema>;
+
+// Phase 9: A2A types
+export type A2AAgentCard = z.infer<typeof A2AAgentCardSchema>;
