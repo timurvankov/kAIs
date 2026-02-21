@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DbClient, DbQueryResult, NatsClient, NatsSubscription } from '../clients.js';
-import { buildServer } from '../server.js';
+import { buildServer, validateIdentifier } from '../server.js';
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -313,14 +313,106 @@ describe('API Server', () => {
     });
   });
 
+  // ----- Identifier validation -----
+
+  describe('validateIdentifier', () => {
+    it('accepts valid RFC 1123 names', () => {
+      expect(validateIdentifier('researcher')).toBe(true);
+      expect(validateIdentifier('my-cell')).toBe(true);
+      expect(validateIdentifier('a')).toBe(true);
+      expect(validateIdentifier('abc123')).toBe(true);
+      expect(validateIdentifier('default')).toBe(true);
+    });
+
+    it('rejects names with NATS wildcards or dots', () => {
+      expect(validateIdentifier('foo.bar')).toBe(false);
+      expect(validateIdentifier('foo.>')).toBe(false);
+      expect(validateIdentifier('foo.*')).toBe(false);
+      expect(validateIdentifier('>')).toBe(false);
+      expect(validateIdentifier('*')).toBe(false);
+    });
+
+    it('rejects names with invalid characters', () => {
+      expect(validateIdentifier('FOO')).toBe(false);
+      expect(validateIdentifier('foo bar')).toBe(false);
+      expect(validateIdentifier('foo_bar')).toBe(false);
+      expect(validateIdentifier('')).toBe(false);
+      expect(validateIdentifier('-start')).toBe(false);
+      expect(validateIdentifier('end-')).toBe(false);
+    });
+  });
+
+  // ----- Invalid cell name / namespace on routes -----
+
+  describe('Invalid identifiers on routes', () => {
+    it('POST /exec returns 400 for name with dots', async () => {
+      db = createMockDb();
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/cells/foo.bar/exec',
+        payload: { message: 'test' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Invalid cell name');
+      expect(nats.published).toHaveLength(0);
+
+      await app.close();
+    });
+
+    it('POST /exec returns 400 for wildcard namespace', async () => {
+      db = createMockDb();
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/cells/researcher/exec',
+        payload: { message: 'test', namespace: 'foo.>' },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Invalid namespace');
+      expect(nats.published).toHaveLength(0);
+
+      await app.close();
+    });
+
+    it('GET /logs returns 400 for name with wildcards', async () => {
+      db = createMockDb();
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/cells/foo.*/logs',
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Invalid cell name');
+
+      await app.close();
+    });
+
+    it('GET /usage returns 400 for invalid namespace', async () => {
+      db = createMockDb([{ rows: [{ events: '0', total_cost: '0', total_tokens: '0' }] }]);
+      const app = await buildServer({ nats, db, logger: false });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/cells/researcher/usage?namespace=FOO',
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('Invalid namespace');
+
+      await app.close();
+    });
+  });
+
   // ----- WS /api/v1/cells/:name/attach -----
 
   describe('WS /api/v1/cells/:name/attach', () => {
-    it('TODO: WebSocket test (requires ws client setup)', () => {
-      // WebSocket testing with Fastify inject is non-trivial.
-      // The route is registered and the subscription/publish logic
-      // is covered by the NatsClient/DbClient interface contracts.
-      expect(true).toBe(true);
-    });
+    it.todo('WebSocket test (requires ws client setup)');
   });
 });

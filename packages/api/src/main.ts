@@ -57,6 +57,15 @@ async function main(): Promise<void> {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Graceful shutdown — drain NATS and close Postgres pool on termination
+  const shutdown = async () => {
+    await app.close();
+    await nc.drain();
+    await pool.end();
+  };
+  process.on('SIGTERM', () => void shutdown());
+  process.on('SIGINT', () => void shutdown());
 }
 
 main().catch((err) => {

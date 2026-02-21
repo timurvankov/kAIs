@@ -4,6 +4,16 @@ import fastifyWebsocket from '@fastify/websocket';
 import { createEnvelope } from '@kais/core';
 import type { DbClient, NatsClient } from './clients.js';
 
+/**
+ * RFC 1123 label: lowercase alphanumeric and hyphens, 1-63 chars,
+ * must start and end with alphanumeric. Prevents NATS wildcard/subject injection.
+ */
+const SAFE_IDENTIFIER = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+export function validateIdentifier(value: string): boolean {
+  return SAFE_IDENTIFIER.test(value);
+}
+
 /** Options for building the kAIs API server. */
 export interface BuildServerOptions {
   nats: NatsClient;
@@ -33,8 +43,8 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     Body: { message: string; namespace?: string };
   }>('/api/v1/cells/:name/exec', async (req, reply) => {
     const { name } = req.params;
-    if (!name) {
-      return reply.status(400).send({ error: 'Missing cell name' });
+    if (!name || !validateIdentifier(name)) {
+      return reply.status(400).send({ error: 'Invalid cell name' });
     }
 
     const body = req.body as { message?: string; namespace?: string } | undefined;
@@ -43,6 +53,9 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     }
 
     const namespace = body.namespace ?? 'default';
+    if (!validateIdentifier(namespace)) {
+      return reply.status(400).send({ error: 'Invalid namespace' });
+    }
     const envelope = createEnvelope({
       from: 'api',
       to: `cell.${namespace}.${name}`,
@@ -63,11 +76,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     Querystring: { namespace?: string; limit?: string; offset?: string };
   }>('/api/v1/cells/:name/logs', async (req, reply) => {
     const { name } = req.params;
-    if (!name) {
-      return reply.status(400).send({ error: 'Missing cell name' });
+    if (!name || !validateIdentifier(name)) {
+      return reply.status(400).send({ error: 'Invalid cell name' });
     }
 
     const namespace = req.query.namespace ?? 'default';
+    if (!validateIdentifier(namespace)) {
+      return reply.status(400).send({ error: 'Invalid namespace' });
+    }
     const limit = Math.min(Math.max(parseInt(req.query.limit ?? '50', 10) || 50, 1), 1000);
     const offset = Math.max(parseInt(req.query.offset ?? '0', 10) || 0, 0);
 
@@ -96,11 +112,14 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     Querystring: { namespace?: string };
   }>('/api/v1/cells/:name/usage', async (req, reply) => {
     const { name } = req.params;
-    if (!name) {
-      return reply.status(400).send({ error: 'Missing cell name' });
+    if (!name || !validateIdentifier(name)) {
+      return reply.status(400).send({ error: 'Invalid cell name' });
     }
 
     const namespace = req.query.namespace ?? 'default';
+    if (!validateIdentifier(namespace)) {
+      return reply.status(400).send({ error: 'Invalid namespace' });
+    }
 
     const result = await db.query(
       `SELECT
@@ -131,6 +150,11 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
   }>('/api/v1/cells/:name/attach', { websocket: true }, (socket, req) => {
     const { name } = req.params;
     const namespace = (req.query as { namespace?: string }).namespace ?? 'default';
+
+    if (!validateIdentifier(name) || !validateIdentifier(namespace)) {
+      socket.close(1008, 'Invalid cell name or namespace');
+      return;
+    }
 
     // Subscribe to cell outbox
     const sub = nats.subscribe(`cell.${namespace}.${name}.outbox`);
