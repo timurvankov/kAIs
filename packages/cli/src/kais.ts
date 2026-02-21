@@ -4,7 +4,7 @@ import { execSync, execFileSync } from 'node:child_process';
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { renderTopology } from './topology-renderer.js';
+import { renderTopology, type TopologySpec } from './topology-renderer.js';
 import { formatMissionStatus } from './mission-formatter.js';
 
 const EXAMPLE_CELL = `apiVersion: kais.io/v1
@@ -419,14 +419,7 @@ export function createProgram(): Command {
       const formation = JSON.parse(formationJson) as {
         spec: {
           cells: Array<{ name: string; replicas: number; spec: unknown }>;
-          topology: {
-            type: string;
-            root?: string;
-            hub?: string;
-            routes?: Array<{ from: string; to: string[] }>;
-            broadcast?: { enabled: boolean; from: string[] };
-            blackboard?: { decayMinutes: number };
-          };
+          topology: TopologySpec;
         };
       };
 

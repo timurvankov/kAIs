@@ -38,7 +38,7 @@ function makeConfig(overrides: Partial<SpawnCellConfig> = {}): SpawnCellConfig &
     remainingBudget: () => totalBudget - budgetUsed,
     deductBudget: (amount: number) => { budgetUsed += amount; },
     ...overrides,
-  };
+  } as SpawnCellConfig & { kubeClient: MockKubeClient };
 }
 
 describe('spawn_cell tool', () => {

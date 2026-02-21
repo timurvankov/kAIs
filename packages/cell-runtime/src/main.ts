@@ -14,9 +14,9 @@ import type { Tool } from './tools/tool-executor.js';
 import type { CellSpec } from '@kais/core';
 import { createTopologyEnforcer } from './topology/topology-enforcer.js';
 
-const CELL_NAME = process.env['CELL_NAME'];
+const CELL_NAME = process.env['CELL_NAME'] ?? '';
 const CELL_NAMESPACE = process.env['CELL_NAMESPACE'] ?? 'default';
-const CELL_SPEC_JSON = process.env['CELL_SPEC'];
+const CELL_SPEC_JSON = process.env['CELL_SPEC'] ?? '';
 const NATS_URL = process.env['NATS_URL'] ?? 'nats://localhost:4222';
 
 if (!CELL_NAME || !CELL_SPEC_JSON) {
