@@ -18,3 +18,6 @@ export type { KubeClientLite, CellResourceLite, SpawnCellConfig } from './spawn-
 
 export { createCommitFileTool } from './commit-file.js';
 export type { CommitFileFs, CommitFileConfig } from './commit-file.js';
+
+export { createRecallTool, createRememberTool, createCorrectTool } from './recall.js';
+export type { KnowledgeToolConfig } from './recall.js';

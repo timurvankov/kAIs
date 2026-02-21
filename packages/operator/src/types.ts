@@ -1,10 +1,14 @@
 import type {
+  BlueprintSpec,
+  BlueprintStatus,
   CellSpec,
   CellStatus,
   ExperimentSpec,
   ExperimentStatus,
   FormationSpec,
   FormationStatus,
+  KnowledgeGraphSpec,
+  KnowledgeGraphStatus,
   MissionSpec,
   MissionStatus,
 } from '@kais/core';
@@ -119,6 +123,47 @@ export type ExperimentEventType =
   | 'ExperimentFailed'
   | 'ExperimentAborted'
   | 'ExperimentOverBudget';
+
+/**
+ * Kubernetes custom resource representing a Blueprint.
+ * Matches the Blueprint CRD defined in crds/blueprint-crd.yaml.
+ */
+export interface BlueprintResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Blueprint';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: BlueprintSpec;
+  status?: BlueprintStatus;
+}
+
+/**
+ * Event types emitted by the BlueprintController.
+ */
+export type BlueprintEventType =
+  | 'BlueprintCreated'
+  | 'BlueprintUpdated'
+  | 'BlueprintVersioned';
+
+/** KnowledgeGraph custom resource shape. */
+export interface KnowledgeGraphResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'KnowledgeGraph';
+  metadata: {
+    name: string;
+    namespace: string;
+    resourceVersion?: string;
+    uid?: string;
+  };
+  spec: KnowledgeGraphSpec;
+  status?: KnowledgeGraphStatus;
+}
+
+export type KnowledgeGraphEventType = 'Created' | 'Provisioning' | 'Ready' | 'Error' | 'Deleted';
 
 /**
  * Abstraction over the K8s API calls used by CellController and FormationController.
@@ -241,6 +286,54 @@ export interface KubeClient {
     reason: string,
     message: string,
   ): Promise<void>;
+
+  // --- Blueprint management ---
+
+  /** Update the status subresource of a Blueprint CRD. */
+  updateBlueprintStatus(
+    name: string,
+    namespace: string,
+    status: BlueprintStatus,
+  ): Promise<void>;
+
+  /** Create a K8s Event for a Blueprint. */
+  emitBlueprintEvent(
+    blueprint: BlueprintResource,
+    eventType: BlueprintEventType,
+    reason: string,
+    message: string,
+  ): Promise<void>;
+
+  // --- KnowledgeGraph management ---
+
+  /** Update the status subresource of a KnowledgeGraph CRD. */
+  updateKnowledgeGraphStatus(
+    name: string,
+    namespace: string,
+    status: KnowledgeGraphStatus,
+  ): Promise<void>;
+
+  /** Create a K8s Event for a KnowledgeGraph. */
+  emitKnowledgeGraphEvent(
+    resource: KnowledgeGraphResource,
+    type: KnowledgeGraphEventType,
+    message: string,
+  ): Promise<void>;
+
+  /** List KnowledgeGraph CRDs in a namespace. */
+  listKnowledgeGraphs(namespace: string): Promise<KnowledgeGraphResource[]>;
+
+  /** Create a Pod (simplified, for KnowledgeGraph dedicated mode). */
+  createKnowledgeGraphPod(namespace: string, pod: unknown): Promise<void>;
+
+  /** Create a Service (simplified, for KnowledgeGraph dedicated mode). */
+  createKnowledgeGraphService(namespace: string, service: unknown): Promise<void>;
+
+  /** Delete a Pod by name (simplified, for KnowledgeGraph cleanup). */
+  deleteKnowledgeGraphPod(name: string, namespace: string): Promise<void>;
+
+  /** Delete a Service by name (simplified, for KnowledgeGraph cleanup). */
+  deleteKnowledgeGraphService(name: string, namespace: string): Promise<void>;
 }
 
 /**

@@ -104,6 +104,15 @@ function createMockClient(): KubeClient & {
     async emitMissionEvent(): Promise<void> {},
     async updateExperimentStatus(): Promise<void> {},
     async emitExperimentEvent(): Promise<void> {},
+    updateBlueprintStatus: vi.fn(),
+    emitBlueprintEvent: vi.fn(),
+    updateKnowledgeGraphStatus: vi.fn(),
+    emitKnowledgeGraphEvent: vi.fn(),
+    listKnowledgeGraphs: vi.fn().mockResolvedValue([]),
+    createKnowledgeGraphPod: vi.fn(),
+    createKnowledgeGraphService: vi.fn(),
+    deleteKnowledgeGraphPod: vi.fn(),
+    deleteKnowledgeGraphService: vi.fn(),
   };
 }
 

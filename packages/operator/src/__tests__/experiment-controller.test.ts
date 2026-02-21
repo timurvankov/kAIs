@@ -1,6 +1,6 @@
 import type { CellSpec, CellStatus, ExperimentStatus, FormationStatus, MissionStatus } from '@kais/core';
 import type * as k8s from '@kubernetes/client-node';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExperimentController } from '../experiment-controller.js';
 import type {
@@ -83,6 +83,15 @@ function createMockClient(): KubeClient & {
     ): Promise<void> {
       events.push({ experiment, eventType, reason, message });
     },
+    updateBlueprintStatus: vi.fn(),
+    emitBlueprintEvent: vi.fn(),
+    updateKnowledgeGraphStatus: vi.fn(),
+    emitKnowledgeGraphEvent: vi.fn(),
+    listKnowledgeGraphs: vi.fn().mockResolvedValue([]),
+    createKnowledgeGraphPod: vi.fn(),
+    createKnowledgeGraphService: vi.fn(),
+    deleteKnowledgeGraphPod: vi.fn(),
+    deleteKnowledgeGraphService: vi.fn(),
   };
 }
 
