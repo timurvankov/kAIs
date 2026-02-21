@@ -2,7 +2,7 @@ import type * as k8s from '@kubernetes/client-node';
 import * as k8sLib from '@kubernetes/client-node';
 import type { MissionStatus } from '@kais/core';
 import { getTracer } from '@kais/core';
-import { SpanStatusCode } from '@opentelemetry/api';
+import { SpanStatusCode, trace, context, propagation } from '@opentelemetry/api';
 
 import { runCheck } from './check-runner.js';
 import { parseTimeout } from './timeout.js';
@@ -189,31 +189,39 @@ export class MissionController {
    * Reconcile a Mission — drive its lifecycle through phases.
    */
   async reconcileMission(mission: MissionResource): Promise<void> {
+    // Restore trace context from mission status so all phases share one trace
+    const parentContext = mission.status?.traceContext
+      ? propagation.extract(context.active(), mission.status.traceContext)
+      : context.active();
+
     const span = tracer.startSpan('operator.reconcile_mission', {
       attributes: {
         'resource.name': mission.metadata.name,
         'resource.namespace': mission.metadata.namespace ?? 'default',
         'resource.phase': mission.status?.phase ?? 'Unknown',
       },
-    });
+    }, parentContext);
+    const ctx = trace.setSpan(parentContext, span);
     try {
-      const phase = mission.status?.phase;
+      await context.with(ctx, async () => {
+        const phase = mission.status?.phase;
 
-      switch (phase) {
-        case undefined:
-        case 'Pending':
-          await this.reconcilePending(mission);
-          break;
-        case 'Running':
-          await this.reconcileRunning(mission);
-          break;
-        case 'Succeeded':
-          // Terminal phase — transition events already emitted during Running→Succeeded
-          break;
-        case 'Failed':
-          // Terminal phase — transition events already emitted during Running→Failed
-          break;
-      }
+        switch (phase) {
+          case undefined:
+          case 'Pending':
+            await this.reconcilePending(mission);
+            break;
+          case 'Running':
+            await this.reconcileRunning(mission);
+            break;
+          case 'Succeeded':
+            // Terminal phase — transition events already emitted during Running→Succeeded
+            break;
+          case 'Failed':
+            // Terminal phase — transition events already emitted during Running→Failed
+            break;
+        }
+      });
       span.setStatus({ code: SpanStatusCode.OK });
     } catch (err) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
@@ -228,6 +236,13 @@ export class MissionController {
    */
   private async reconcilePending(mission: MissionResource): Promise<void> {
     const { entrypoint } = mission.spec;
+
+    // Log the message being sent as a span event
+    const activeSpan = trace.getActiveSpan();
+    activeSpan?.addEvent('nats.send', {
+      'nats.subject': `cell.${mission.metadata.namespace}.${entrypoint.cell}.inbox`,
+      'nats.message': entrypoint.message.slice(0, 4096),
+    });
 
     // Send objective to the entrypoint cell via NATS
     await this.nats.sendMessageToCell(
@@ -249,12 +264,17 @@ export class MissionController {
       });
     }
 
+    // Capture current trace context so subsequent reconcile phases continue this trace
+    const traceCtx: Record<string, string> = {};
+    propagation.inject(context.active(), traceCtx);
+
     const status: MissionStatus = {
       phase: 'Running',
       attempt,
       startedAt: now,
       cost: mission.status?.cost ?? 0,
       history: history.length > 0 ? history : undefined,
+      traceContext: Object.keys(traceCtx).length > 0 ? traceCtx : undefined,
     };
 
     await this.client.updateMissionStatus(
@@ -284,6 +304,7 @@ export class MissionController {
       review: mission.status?.review,
       history: mission.status?.history,
       message: mission.status?.message,
+      traceContext: mission.status?.traceContext,
     };
 
     const maxAttempts = mission.spec.completion.maxAttempts;
@@ -365,6 +386,15 @@ export class MissionController {
     }
 
     status.checks = checkResults;
+
+    // Log check results as span events
+    const activeSpan = trace.getActiveSpan();
+    for (const cr of checkResults) {
+      activeSpan?.addEvent('check.result', {
+        'check.name': cr.name,
+        'check.status': cr.status,
+      });
+    }
 
     // 4. If all checks pass, handle review or succeed
     if (allPassed) {

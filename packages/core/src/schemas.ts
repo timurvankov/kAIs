@@ -304,4 +304,5 @@ export const MissionStatusSchema = z.object({
   review: MissionReviewStatusSchema.optional(),
   history: z.array(MissionHistoryEntrySchema).optional(),
   message: z.string().optional(),
+  traceContext: z.record(z.string(), z.string()).optional(),
 });

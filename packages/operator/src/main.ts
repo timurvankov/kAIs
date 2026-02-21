@@ -7,6 +7,7 @@
 import * as k8s from '@kubernetes/client-node';
 import { connect as natsConnect, RetentionPolicy, StorageType } from 'nats';
 import { createEnvelope, initTelemetry, shutdownTelemetry } from '@kais/core';
+import { context, propagation } from '@opentelemetry/api';
 
 import { CellController } from './controller.js';
 import { FormationController } from './formation-controller.js';
@@ -422,11 +423,14 @@ async function createNatsClient(): Promise<NatsClient> {
   return {
     async sendMessageToCell(cellName, namespace, message) {
       const subject = `cell.${namespace}.${cellName}.inbox`;
+      const traceCtx: Record<string, string> = {};
+      propagation.inject(context.active(), traceCtx);
       const envelope = createEnvelope({
         from: 'mission-controller',
         to: `cell.${namespace}.${cellName}`,
         type: 'message',
         payload: { content: message },
+        traceContext: Object.keys(traceCtx).length > 0 ? traceCtx : undefined,
       });
       const data = new TextEncoder().encode(JSON.stringify(envelope));
       nc.publish(subject, data);

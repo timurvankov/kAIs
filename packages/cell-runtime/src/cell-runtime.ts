@@ -232,6 +232,11 @@ export class CellRuntime {
       ? propagation.extract(context.active(), envelope.traceContext)
       : context.active();
 
+    // Extract message content for the trace
+    const messageContent = typeof envelope.payload === 'string'
+      ? envelope.payload
+      : (envelope.payload as { content?: string })?.content ?? JSON.stringify(envelope.payload);
+
     const span = this.tracer.startSpan('cell.handle_message', {
       kind: SpanKind.SERVER,
       attributes: {
@@ -240,6 +245,11 @@ export class CellRuntime {
         'message.from': envelope.from,
       },
     }, parentContext);
+
+    // Log incoming message content
+    span.addEvent('message.received', {
+      'message.content': messageContent.slice(0, 4096),
+    });
 
     // Record received message metric
     this.messagesCounter.add(1, { direction: 'received' });
@@ -316,11 +326,24 @@ export class CellRuntime {
       let thinkOutput: ThinkOutput;
       try {
         const llmStart = Date.now();
+        // Capture the last user message for the trace
+        const lastUserMsg = messages.filter(m => m.role === 'user').pop();
+        const promptPreview = lastUserMsg
+          ? (typeof lastUserMsg.content === 'string'
+            ? lastUserMsg.content
+            : JSON.stringify(lastUserMsg.content))
+          : '';
+
         const llmSpan = this.tracer.startSpan('cell.llm_call', {
           attributes: {
             'llm.provider': this.spec.mind.provider,
             'llm.model': this.spec.mind.model,
           },
+        });
+
+        // Log the prompt as a span event (keeps large content out of attributes)
+        llmSpan.addEvent('gen_ai.content.prompt', {
+          'gen_ai.prompt': promptPreview.slice(0, 4096),
         });
 
         try {
@@ -332,6 +355,11 @@ export class CellRuntime {
           });
 
           const llmLatency = Date.now() - llmStart;
+
+          // Log the completion as a span event
+          llmSpan.addEvent('gen_ai.content.completion', {
+            'gen_ai.completion': (thinkOutput.content ?? '').slice(0, 4096),
+          });
 
           // Set span attributes after completion
           llmSpan.setAttribute('llm.input_tokens', thinkOutput.usage.inputTokens);
@@ -466,6 +494,13 @@ export class CellRuntime {
     const content = typeof message.content === 'string'
       ? message.content
       : message.content.map(b => b.text ?? b.content ?? '').join('');
+
+    // Log outgoing message content on the active span
+    const activeSpan = trace.getActiveSpan();
+    activeSpan?.addEvent('message.sent', {
+      'message.content': content.slice(0, 4096),
+      'message.to': sourceEnvelope.from,
+    });
 
     // Inject current trace context into the outgoing envelope
     const traceContext: Record<string, string> = {};

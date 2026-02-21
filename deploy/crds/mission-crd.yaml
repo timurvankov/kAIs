@@ -146,6 +146,10 @@ spec:
                     required: ["attempt", "startedAt", "result"]
                 message:
                   type: string
+                traceContext:
+                  type: object
+                  additionalProperties:
+                    type: string
       subresources:
         status: {}
       additionalPrinterColumns:
