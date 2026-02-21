@@ -148,61 +148,81 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     },
 
     async updateCellStatus(name, namespace, status) {
-      let existing;
-      try {
-        existing = await customApi.getNamespacedCustomObject({
-          group: CRD_GROUP,
-          version: CRD_VERSION,
-          namespace,
-          plural: 'cells',
-          name,
-        });
-      } catch (err: unknown) {
-        if (httpStatus(err) === 404) {
-          console.log(`[kais-operator] cell ${namespace}/${name} not found, skipping status update`);
-          return;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let existing;
+        try {
+          existing = await customApi.getNamespacedCustomObject({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'cells',
+            name,
+          });
+        } catch (err: unknown) {
+          if (httpStatus(err) === 404) {
+            console.log(`[kais-operator] cell ${namespace}/${name} not found, skipping status update`);
+            return;
+          }
+          throw err;
         }
-        throw err;
+        (existing as Record<string, unknown>).status = status;
+        try {
+          await customApi.replaceNamespacedCustomObjectStatus({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'cells',
+            name,
+            body: existing,
+          });
+          return;
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409 && attempt < 2) {
+            continue; // Retry with fresh resourceVersion
+          }
+          throw err;
+        }
       }
-      (existing as Record<string, unknown>).status = status;
-      await customApi.replaceNamespacedCustomObjectStatus({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'cells',
-        name,
-        body: existing,
-      });
     },
 
     // --- Formations ---
 
     async updateFormationStatus(name, namespace, status) {
-      let existing;
-      try {
-        existing = await customApi.getNamespacedCustomObject({
-          group: CRD_GROUP,
-          version: CRD_VERSION,
-          namespace,
-          plural: 'formations',
-          name,
-        });
-      } catch (err: unknown) {
-        if (httpStatus(err) === 404) {
-          console.log(`[kais-operator] formation ${namespace}/${name} not found, skipping status update`);
-          return;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let existing;
+        try {
+          existing = await customApi.getNamespacedCustomObject({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'formations',
+            name,
+          });
+        } catch (err: unknown) {
+          if (httpStatus(err) === 404) {
+            console.log(`[kais-operator] formation ${namespace}/${name} not found, skipping status update`);
+            return;
+          }
+          throw err;
         }
-        throw err;
+        (existing as Record<string, unknown>).status = status;
+        try {
+          await customApi.replaceNamespacedCustomObjectStatus({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'formations',
+            name,
+            body: existing,
+          });
+          return;
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409 && attempt < 2) {
+            continue;
+          }
+          throw err;
+        }
       }
-      (existing as Record<string, unknown>).status = status;
-      await customApi.replaceNamespacedCustomObjectStatus({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'formations',
-        name,
-        body: existing,
-      });
     },
 
     // --- ConfigMaps ---
@@ -304,31 +324,41 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     // --- Missions ---
 
     async updateMissionStatus(name, namespace, status) {
-      let existing;
-      try {
-        existing = await customApi.getNamespacedCustomObject({
-          group: CRD_GROUP,
-          version: CRD_VERSION,
-          namespace,
-          plural: 'missions',
-          name,
-        });
-      } catch (err: unknown) {
-        if (httpStatus(err) === 404) {
-          console.log(`[kais-operator] mission ${namespace}/${name} not found, skipping status update`);
-          return;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        let existing;
+        try {
+          existing = await customApi.getNamespacedCustomObject({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'missions',
+            name,
+          });
+        } catch (err: unknown) {
+          if (httpStatus(err) === 404) {
+            console.log(`[kais-operator] mission ${namespace}/${name} not found, skipping status update`);
+            return;
+          }
+          throw err;
         }
-        throw err;
+        (existing as Record<string, unknown>).status = status;
+        try {
+          await customApi.replaceNamespacedCustomObjectStatus({
+            group: CRD_GROUP,
+            version: CRD_VERSION,
+            namespace,
+            plural: 'missions',
+            name,
+            body: existing,
+          });
+          return;
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409 && attempt < 2) {
+            continue;
+          }
+          throw err;
+        }
       }
-      (existing as Record<string, unknown>).status = status;
-      await customApi.replaceNamespacedCustomObjectStatus({
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: 'missions',
-        name,
-        body: existing,
-      });
     },
 
     async emitMissionEvent(mission, eventType, reason, message) {

@@ -43,7 +43,7 @@ spec:
                             type: string
                           type:
                             type: string
-                            enum: ["fileExists", "command", "coverage"]
+                            enum: ["fileExists", "command", "coverage", "natsResponse"]
                           paths:
                             type: array
                             items:
@@ -60,6 +60,11 @@ spec:
                             type: string
                           value:
                             type: number
+                          subject:
+                            type: string
+                          timeoutSeconds:
+                            type: integer
+                            minimum: 1
                         required: ["name", "type"]
                     review:
                       type: object
