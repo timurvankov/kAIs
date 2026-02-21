@@ -870,3 +870,363 @@ Each agent gets:
 2. The specific stream tasks from this document
 3. Access to packages/ they need to modify
 4. Clear deliverable criteria
+
+---
+
+## Examples & Test Plan Per Phase
+
+### Examples Directory Structure (future)
+
+```
+examples/
+  basics/              # Phase 1-2: single cells, formations, missions
+    researcher.yaml
+    ollama-local.yaml
+    research-team.yaml
+    code-review-mission.yaml
+  topologies/          # Phase 2: topology variations
+    star-formation.yaml
+    hierarchy-formation.yaml
+    ring-consensus.yaml
+    stigmergy-swarm.yaml
+    custom-routing.yaml
+  experiments/         # Phase 3: experiment configs
+    topology-comparison.yaml
+    temperature-sweep.yaml
+    model-comparison.yaml
+  protocols/           # Phase 3: protocol examples
+    contract-negotiation.yaml
+    deliberation-vote.yaml
+    auction-bidding.yaml
+  knowledge/           # Phase 4: knowledge + blueprints
+    blueprint-code-review.yaml
+    blueprint-data-pipeline.yaml
+    knowledge-scoped.yaml
+  automation/          # Phase 5: instincts + rituals
+    budget-guardian-instinct.yaml
+    daily-report-ritual.yaml
+    health-monitor.yaml
+  evolution/           # Phase 6: evolution + swarm
+    evolve-topology.yaml
+    swarm-autoscaler.yaml
+  advanced/            # Phase 8-9: recursive, human, federation
+    recursive-ecosystem.yaml
+    human-in-loop.yaml
+    federated-formation.yaml
+    a2a-external-agent.yaml
+    channel-cross-team.yaml
+```
+
+---
+
+### Phase 1: Foundation
+
+**Examples to add:**
+- (already done) `researcher.yaml` — single Cell with Anthropic
+- (already done) `ollama-local.yaml` — single Cell with Ollama
+
+**Integration tests:**
+- (already done) API server exec/logs/usage endpoints
+- (already done) EventConsumer NATS→Postgres pipeline
+- (already done) Input validation (cell names, namespaces, messages)
+- (already done) Pagination and namespace isolation
+
+**E2E tests:**
+- (already done) Cell lifecycle: create → Pod → Running → delete → cleanup
+- (already done) Cell with Ollama: real LLM response via NATS
+
+---
+
+### Phase 2: Formation + Mission + Topology
+
+**Examples to add:**
+- (already done) `research-team.yaml` — star topology, multi-provider
+- (already done) `hierarchy-formation.yaml` — hierarchy with director/leads/workers
+- (already done) `ring-consensus.yaml` — ring for peer review
+- (already done) `stigmergy-swarm.yaml` — blackboard coordination
+- (already done) `custom-routing.yaml` — explicit data pipeline
+- (already done) `code-review-mission.yaml` — Mission with completion checks
+
+**Integration tests:**
+- (already done) Multi-cell concurrent events
+- (already done) Different event types from same cell
+- (already done) EventConsumer stop/restart resilience
+- (already done) Malformed event handling
+- TODO: Topology route validation (TopologyEnforcer unit → integration)
+- TODO: Workspace PVC mount verification
+- TODO: Budget allocation from Formation to Cells
+
+**E2E tests:**
+- (already done) Formation lifecycle: create → child Cells → Pods → cascade delete
+- (already done) Formation topologies: star, ring cell creation
+- (already done) Formation scaling: scale up/down replicas
+- (already done) Mission lifecycle: create → Running → attempt tracking → delete
+- TODO: Mission with completion checks (command check passes/fails)
+- TODO: Mission retry on failure (maxAttempts > 1)
+- TODO: Cross-cell communication via send_message tool
+- TODO: Topology enforcement (message blocked by topology)
+
+---
+
+### Phase 3: Experiments + Protocols + In-Process
+
+**Examples to add:**
+- `topology-comparison.yaml` — Experiment comparing star vs ring vs mesh
+  - Variables: topology.type, cells[].replicas
+  - Fitness: success_rate, avg_latency, total_cost
+- `temperature-sweep.yaml` — Experiment sweeping temperature 0.1-1.0
+- `model-comparison.yaml` — Experiment comparing Ollama models
+- `contract-negotiation.yaml` — Formation with contract protocol
+- `deliberation-vote.yaml` — Formation with deliberation protocol
+
+**Integration tests:**
+- Variant matrix generation (cartesian product correctness)
+- Cost estimation before experiment launch
+- Statistical analysis: t-test, CI, effect size on mock data
+- Pareto front computation (multi-objective)
+- Protocol state machine: valid transitions accepted
+- Protocol state machine: invalid transitions rejected
+- Stigmergy blackboard: write → read → TTL decay
+- InMemoryBus: pub/sub with wildcards, message delivery
+- CommMetrics: message count and latency tracking
+
+**E2E tests:**
+- `experiment-lifecycle.test.ts`:
+  - Create Experiment CRD → variants run → results collected
+  - Cost estimation matches actual cost (within tolerance)
+  - Statistical report generated (p-values, CIs)
+- `protocol-enforcement.test.ts`:
+  - Formation with contract protocol → valid message flow succeeds
+  - Invalid message sequence → rejected by ProtocolEnforcer
+- `in-process-runtime.test.ts`:
+  - InProcessRuntime: spawn cells as worker_threads
+  - InMemoryBus: message delivery without NATS
+  - Compare results between K8s and in-process (should be equivalent)
+
+---
+
+### Phase 4: Knowledge + Blueprints + Local Brain
+
+**Examples to add:**
+- `blueprint-code-review.yaml` — Blueprint with parameters (language, depth)
+- `blueprint-data-pipeline.yaml` — Blueprint for ETL team
+- `knowledge-scoped.yaml` — Formation with knowledge scope annotations
+- `local-brain-cell.yaml` — Cell with PreThink/PostFilter via local Ollama
+
+**Integration tests:**
+- Knowledge Service CRUD: add fact → search → retrieve → invalidate
+- Semantic search: similar queries return relevant facts
+- Knowledge scoping: cell sees own + parent scopes, not sibling scopes
+- Blueprint parameter substitution (Jinja-like)
+- Blueprint versioning: update → new version → old version still accessible
+- PreThink pipeline: message → local classification → cloud call decision
+- PostFilter pipeline: response → local validation → pass/reject
+- Post-mission extraction: completed Mission → LLM extracts facts → stored
+- Procedural memory: store task→steps → recall by similarity
+
+**E2E tests:**
+- `knowledge-accumulation.test.ts`:
+  - Run 3 similar missions → facts extracted and stored
+  - 4th mission uses accumulated knowledge (faster or better result)
+- `blueprint-instantiation.test.ts`:
+  - Create Blueprint → instantiate with parameters → Formation created
+  - Blueprint from experiment: best variant → new Blueprint
+- `local-brain-pipeline.test.ts`:
+  - Cell with localBrain enabled → PreThink classifies, PostFilter validates
+  - Measure: fewer cloud LLM calls with local brain enabled
+
+---
+
+### Phase 5: Instinct + Ritual + Biological Core
+
+**Examples to add:**
+- `budget-guardian-instinct.yaml` — Instinct: on budget > 80% → switch to cheaper model
+- `health-monitor.yaml` — Instinct: on cell error rate > threshold → restart
+- `daily-report-ritual.yaml` — Ritual: daily summary Mission at 9am
+- `knowledge-hygiene-ritual.yaml` — Ritual: weekly knowledge cleanup
+- `self-aware-cell.yaml` — Cell with SelfModel + CognitiveModulation enabled
+- `symbiont-cell.yaml` — Cell with linter/type-checker sidecars
+
+**Integration tests:**
+- CEL expression evaluation: budget > 0.5, cell.status == "Failed"
+- Instinct trigger matching: event → condition → action
+- Instinct rate limiting for LLM judge conditions
+- Ritual cron scheduling: next run calculation
+- Ritual concurrency policy: Forbid, Replace
+- SelfModel update from outcomes: success → reliability up
+- CognitiveModulation: high cognitive load → temperature down
+- SubconsciousLoop: consolidation, apoptosis check
+- OTel trace propagation: traces visible across NATS messages
+- Symbiont sidecar injection: Pod has sidecar container
+
+**E2E tests:**
+- `instinct-budget-guardian.test.ts`:
+  - Formation running → cost exceeds threshold → Instinct fires
+  - Model switched to cheaper alternative automatically
+- `ritual-daily-mission.test.ts`:
+  - Ritual CRD with cron schedule → Mission created on time
+  - Ritual history records execution results
+- `self-model.test.ts`:
+  - Cell runs tasks → SelfModel updated → context includes self-awareness
+  - Apoptosis: low-reliability cell requests shutdown
+- `observability-stack.test.ts`:
+  - Cell processes message → trace appears in Jaeger
+  - Metrics appear in Prometheus (token count, cost, latency)
+
+---
+
+### Phase 6: Evolution + Swarm + Adaptation
+
+**Examples to add:**
+- `evolve-topology.yaml` — Evolution: optimize topology + temperature + replicas
+- `swarm-autoscaler.yaml` — Swarm: scale workers based on queue depth
+- `swarm-budget-aware.yaml` — Swarm: scale down when budget low
+
+**Integration tests:**
+- GA selection operators: tournament, roulette, rank
+- GA crossover: uniform, single-point, two-point
+- GA mutation: type-aware (enum, numeric, string)
+- Fitness evaluation: multi-objective (success + cost + time)
+- Pareto front + gene importance analysis
+- Swarm trigger evaluation: queue_depth, metric, schedule
+- Swarm scaling: stabilization window, cooldown period
+- Topology adaptation: CommMetrics → route weight adjustment
+- Collective immunity: check → miss → solve → contribute → check → hit
+- Neuroplasticity: track tool usage → prune unused tools
+- Graceful drain: cell finishes current task before shutdown
+
+**E2E tests:**
+- `evolution-lifecycle.test.ts`:
+  - Evolution CRD → generations run → fitness improves over time
+  - Best individual → Blueprint created automatically
+  - Gene importance report generated
+- `swarm-scaling.test.ts`:
+  - Swarm CRD with queue_depth trigger → messages pile up → scale up
+  - Queue drains → scale down after stabilization
+  - Budget limit prevents excessive scaling
+- `topology-adaptation.test.ts`:
+  - Formation runs → CommMetrics collected → routes adjusted
+  - High-traffic routes strengthened, unused routes pruned
+- `collective-immunity.test.ts`:
+  - Cell encounters problem → solves → contributes to cache
+  - Another cell encounters same problem → cache hit → skips solving
+
+---
+
+### Phase 7: Dashboard + ClickHouse + Multi-node
+
+**Examples to add:**
+- No YAML examples (dashboard is a web app)
+- Add screenshots/GIFs to README showing dashboard views
+
+**Integration tests:**
+- ClickHouse schema creation and materialized views
+- Dual-write consumer: event → Postgres + ClickHouse (consistency check)
+- ClickHouse analytics queries: cost trends, latency analysis
+- Dashboard API endpoints: overview, topology, timeline, fitness
+- WebSocket real-time event stream to dashboard
+- Postgres cleanup: events older than TTL removed
+- Node affinity in Pod template: correct nodeSelector/tolerations
+
+**E2E tests:**
+- `dashboard-renders.test.ts`:
+  - Dashboard loads, shows platform overview
+  - Cell detail page shows logs and metrics
+  - Formation page shows interactive topology graph
+- `clickhouse-analytics.test.ts`:
+  - Events dual-written → ClickHouse materialized view correct
+  - Cost trend query returns accurate data
+  - Experiment comparison query works
+- `multi-node.test.ts`:
+  - 3-node kind cluster → cells distributed across nodes
+  - Node drain → cells rescheduled to remaining nodes
+  - NATS clustering: messages delivered across nodes
+
+---
+
+### Phase 8: Recursive + RBAC + MCP Gateway
+
+**Examples to add:**
+- `recursive-ecosystem.yaml` — Cell that spawns sub-formation
+- `rbac-roles.yaml` — Role definitions (admin, developer, viewer)
+- `mcp-gateway-config.yaml` — MCP Gateway deployment config
+- `spawn-policy-approval.yaml` — Cell with spawnPolicy: approval_required
+
+**Integration tests:**
+- Recursion safety: maxDepth enforced (depth 3 → depth 4 rejected)
+- Recursion safety: maxDescendants enforced
+- Budget ledger: allocate → spend → balance correct
+- Budget cascade: parent exhausted → children paused
+- Budget reclaim: child deleted → budget returned to parent
+- SpawnRequest workflow: request → approve → Cell created
+- SpawnRequest workflow: request → reject → no Cell
+- RBAC role matching: admin can create, viewer cannot
+- RBAC namespace scoping: role applies only in scope
+- MCP Gateway: tool discovery → kais_launch_team → results
+- NATS auth: Cell can only pub/sub its own subjects
+- NATS auth: topology bypass attempt → rejected
+- Audit log: all operations recorded
+
+**E2E tests:**
+- `recursive-spawn.test.ts`:
+  - Cell spawns child → child spawns grandchild → 3-level tree
+  - Budget flows down tree correctly
+  - Delete root → cascade deletes entire tree
+  - maxDepth exceeded → spawn rejected with error
+- `rbac-enforcement.test.ts`:
+  - Admin user creates Formation → success
+  - Viewer user creates Formation → 403 rejected
+  - Token auth: valid token → authenticated, expired → rejected
+- `mcp-gateway.test.ts`:
+  - MCP SSE server starts, tools discoverable
+  - kais_launch_team → Formation created → Mission runs
+  - kais_recall → knowledge returned
+- `budget-ledger.test.ts`:
+  - Formation with budget → cells allocated → spending tracked
+  - Budget exhaustion → cells paused → top-up → cells resume
+
+---
+
+### Phase 9: Human + Marketplace + Federation + A2A
+
+**Examples to add:**
+- `human-in-loop.yaml` — Formation with human product owner
+- `federated-formation.yaml` — Formation spanning 2 clusters
+- `a2a-external-agent.yaml` — Cell calling external A2A agent
+- `channel-cross-team.yaml` — Channel between 2 Formations
+- `marketplace-blueprint.kbp` — Example Blueprint package
+
+**Integration tests:**
+- HumanCellRuntime: message → pending store → notification dispatched
+- Human escalation: timeout → reminder → LLM fallback
+- Human quick actions: LLM generates response suggestions
+- Marketplace: publish Blueprint → search → install → use
+- Marketplace security scan: no prompt injection patterns
+- Federation heartbeat: cluster registers → capacity reported
+- Federation scheduling: Cell placed on matching cluster
+- NATS Leafnode: messages cross clusters via leafnode
+- A2A Gateway: agent.json discovery → JSON-RPC task handling
+- Channel: post → schema validation → delivery to subscribers
+- Channel permissions: unauthorized Formation → rejected
+
+**E2E tests:**
+- `human-in-loop.test.ts`:
+  - Formation with human Cell → message sent to human inbox
+  - Human responds via dashboard → Formation continues
+  - Escalation: human doesn't respond → LLM takes over
+- `marketplace.test.ts`:
+  - Publish Blueprint → appears in search → install → Formation created
+  - Rate Blueprint → rating persists
+  - Security scan rejects Blueprint with injection patterns
+- `federation.test.ts`:
+  - 2 kind clusters → Federation CRD → Cell scheduled on worker cluster
+  - Message delivery across clusters via NATS Leafnode
+  - Worker cluster drain → Cells rescheduled to primary
+- `a2a-integration.test.ts`:
+  - A2A Gateway serves /.well-known/agent.json
+  - External request → task created → result returned
+  - Cell uses call_agent tool → external agent responds
+- `channel-messaging.test.ts`:
+  - Channel CRD created → 2 Formations connected
+  - Message posted to channel → both Formations receive
+  - Schema enforcement: invalid message shape → rejected

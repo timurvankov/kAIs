@@ -14,10 +14,25 @@ echo "Project root: $PROJECT_ROOT"
 echo "--- Applying CRDs ---"
 kubectl apply -f "$PROJECT_ROOT/deploy/crds/"
 
-# 2. Build and load Docker images into kind
+# 2. Build and load Docker images into kind (with retry for transient network errors)
 echo "--- Building Docker images ---"
-docker build -t kais-operator:e2e -f "$PROJECT_ROOT/docker/Dockerfile.operator" "$PROJECT_ROOT"
-docker build -t kais-cell:e2e -f "$PROJECT_ROOT/docker/Dockerfile.cell" "$PROJECT_ROOT"
+build_with_retry() {
+  local tag="$1" dockerfile="$2" max_attempts=3
+  for attempt in $(seq 1 $max_attempts); do
+    echo "Building $tag (attempt $attempt/$max_attempts)..."
+    if docker build -t "$tag" -f "$dockerfile" "$PROJECT_ROOT"; then
+      return 0
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      echo "Build failed, retrying in 5s..."
+      sleep 5
+    fi
+  done
+  echo "ERROR: Failed to build $tag after $max_attempts attempts"
+  return 1
+}
+build_with_retry kais-operator:e2e "$PROJECT_ROOT/docker/Dockerfile.operator"
+build_with_retry kais-cell:e2e "$PROJECT_ROOT/docker/Dockerfile.cell"
 
 echo "--- Loading images into kind ---"
 kind load docker-image kais-operator:e2e --name="${KIND_CLUSTER_NAME:-kais-test}"
