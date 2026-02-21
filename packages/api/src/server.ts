@@ -3,11 +3,14 @@ import fastifyWebsocket from '@fastify/websocket';
 import { SpanKind, SpanStatusCode, context, propagation } from '@opentelemetry/api';
 
 import { createEnvelope, getTracer } from '@kais/core';
-import type { AuthUser, RbacResource, RbacVerb } from '@kais/core';
+import type { AuthUser, RbacResource, RbacVerb, SpawnRequestPhase } from '@kais/core';
 import type { DbClient, NatsClient } from './clients.js';
 import type { AuthProvider } from './auth.js';
 import { extractBearerToken } from './auth.js';
 import type { RbacService } from './rbac.js';
+import type { BudgetLedgerService } from './budget-ledger.js';
+import type { CellTreeService } from './cell-tree.js';
+import type { SpawnRequestService } from './spawn-request.js';
 
 const tracer = getTracer('kais-api');
 
@@ -49,6 +52,12 @@ export interface BuildServerOptions {
   auth?: AuthProvider;
   /** RBAC service — if omitted, RBAC is disabled (open access). */
   rbac?: RbacService;
+  /** Budget ledger — if provided, budget endpoints are enabled. */
+  budgetLedger?: BudgetLedgerService;
+  /** Cell tree — if provided, tree endpoints are enabled. */
+  cellTree?: CellTreeService;
+  /** Spawn request service — if provided, spawn-request endpoints are enabled. */
+  spawnRequests?: SpawnRequestService;
 }
 
 /**
@@ -56,7 +65,7 @@ export interface BuildServerOptions {
  * Does NOT call listen() — the caller is responsible for starting it.
  */
 export async function buildServer(opts: BuildServerOptions): Promise<FastifyInstance> {
-  const { nats, db, logger = true, auth, rbac } = opts;
+  const { nats, db, logger = true, auth, rbac, budgetLedger, cellTree, spawnRequests } = opts;
 
   const app = Fastify({ logger });
   await app.register(fastifyWebsocket);
@@ -334,6 +343,156 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
       sub.unsubscribe();
     });
   });
+
+  // ========== Phase 8: Budget, Tree, SpawnRequest endpoints ==========
+
+  // ---------- GET /api/v1/budgets/:cellId ----------
+  if (budgetLedger) {
+    app.get<{
+      Params: { cellId: string };
+    }>('/api/v1/budgets/:cellId', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const balance = await budgetLedger.getBalance(cellId);
+      if (!balance) {
+        return reply.status(404).send({ error: 'No budget record found' });
+      }
+      return balance;
+    });
+
+    // ---------- GET /api/v1/budgets/:cellId/tree ----------
+    app.get<{
+      Params: { cellId: string };
+    }>('/api/v1/budgets/:cellId/tree', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const tree = await budgetLedger.getTree(cellId);
+      return { tree };
+    });
+
+    // ---------- GET /api/v1/budgets/:cellId/history ----------
+    app.get<{
+      Params: { cellId: string };
+      Querystring: { limit?: string };
+    }>('/api/v1/budgets/:cellId/history', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const limit = Math.min(Math.max(parseInt(req.query.limit ?? '50', 10) || 50, 1), 500);
+      const history = await budgetLedger.getHistory(cellId, limit);
+      return { history };
+    });
+
+    // ---------- POST /api/v1/budgets/:cellId/top-up ----------
+    app.post<{
+      Params: { cellId: string };
+      Body: { childCellId: string; amount: number };
+    }>('/api/v1/budgets/:cellId/top-up', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const body = req.body as { childCellId?: string; amount?: number } | undefined;
+      if (!body?.childCellId || typeof body.amount !== 'number' || body.amount <= 0) {
+        return reply.status(400).send({ error: 'childCellId and positive amount required' });
+      }
+      try {
+        await budgetLedger.topUp(cellId, body.childCellId, body.amount);
+        return { ok: true };
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    });
+  }
+
+  // ---------- GET /api/v1/tree/:cellId ----------
+  if (cellTree) {
+    app.get<{
+      Params: { cellId: string };
+    }>('/api/v1/tree/:cellId', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const node = await cellTree.getNode(cellId);
+      if (!node) {
+        return reply.status(404).send({ error: 'Cell not found in tree' });
+      }
+      const tree = await cellTree.getTree(node.rootId);
+      return { root: node.rootId, nodes: tree };
+    });
+
+    app.get<{
+      Params: { cellId: string };
+    }>('/api/v1/tree/:cellId/ancestors', async (req, reply) => {
+      const { cellId } = req.params;
+      if (!cellId || !validateIdentifier(cellId)) {
+        return reply.status(400).send({ error: 'Invalid cell ID' });
+      }
+      const ancestors = await cellTree.getAncestors(cellId);
+      return { ancestors };
+    });
+  }
+
+  // ---------- Spawn Requests ----------
+  if (spawnRequests) {
+    app.get<{
+      Querystring: { status?: SpawnRequestPhase; namespace?: string; limit?: string };
+    }>('/api/v1/spawn-requests', async (req) => {
+      const limit = Math.min(Math.max(parseInt(req.query.limit ?? '100', 10) || 100, 1), 500);
+      const list = await spawnRequests.list({
+        status: req.query.status as SpawnRequestPhase | undefined,
+        namespace: req.query.namespace,
+        limit,
+      });
+      return { requests: list };
+    });
+
+    app.get<{
+      Params: { id: string };
+    }>('/api/v1/spawn-requests/:id', async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return reply.status(400).send({ error: 'Invalid request ID' });
+      const request = await spawnRequests.get(id);
+      if (!request) return reply.status(404).send({ error: 'SpawnRequest not found' });
+      return request;
+    });
+
+    app.post<{
+      Params: { id: string };
+    }>('/api/v1/spawn-requests/:id/approve', async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return reply.status(400).send({ error: 'Invalid request ID' });
+      const user = (req as FastifyRequest & { user?: AuthUser }).user;
+      try {
+        const result = await spawnRequests.approve(id, user?.name ?? 'anonymous');
+        return result;
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    });
+
+    app.post<{
+      Params: { id: string };
+      Body: { reason?: string };
+    }>('/api/v1/spawn-requests/:id/reject', async (req, reply) => {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return reply.status(400).send({ error: 'Invalid request ID' });
+      const user = (req as FastifyRequest & { user?: AuthUser }).user;
+      const body = req.body as { reason?: string } | undefined;
+      try {
+        const result = await spawnRequests.reject(id, user?.name ?? 'anonymous', body?.reason);
+        return result;
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message });
+      }
+    });
+  }
 
   return app;
 }

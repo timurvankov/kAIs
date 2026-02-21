@@ -728,13 +728,13 @@ STREAM A (Recursive Ecosystems):
 
 STREAM B (Spawn Approval + RBAC):
   B1 [orch]    SpawnRequest CRD + controller
-  B2 [orch]    RBAC system (Role CRD, user_role_bindings)
-  B3 [api]     RBAC middleware in API server
-  B4 [api]     Auth system (token-based + OIDC option)
+  B2 [orch]    ✅ RBAC system (Role CRD, user_role_bindings)
+  B3 [api]     ✅ RBAC middleware in API server
+  B4 [api]     ✅ Auth system (token-based + OIDC option)
 
 STREAM C (MCP Gateway + Security):
-  C1 [service] MCP Gateway server (packages/mcp-gateway)
-                - MCP SSE transport
+  C1 [service] ✅ MCP Gateway server (packages/mcp-gateway)
+                - MCP Streamable HTTP transport
                 - Tools: kais_launch_team, kais_mission_status, kais_recall, etc.
   C2 [orch]    NATS authorization (per-Cell credentials)
                 - Generate credentials on Cell creation
@@ -754,10 +754,10 @@ STREAM D (CLI + Dashboard):
 TESTS:
   T1 [test]    Unit: Recursion safety validation
   T2 [test]    Unit: Budget ledger operations, tree balance
-  T3 [test]    Unit: RBAC role matching, namespace scoping
+  T3 [test]    ✅ Unit: RBAC role matching, namespace scoping (15 tests)
   T4 [test]    Integration: 3-level recursive spawn with budget cascade
-  T5 [test]    Integration: RBAC enforcement (authorized/unauthorized)
-  T6 [test]    Integration: MCP Gateway → launch team → results
+  T5 [test]    ✅ Integration: RBAC enforcement (authorized/unauthorized) (8 tests)
+  T6 [test]    ✅ Integration: MCP Gateway → launch team → results (16 tests)
   T7 [test]    Integration: NATS auth prevents topology bypass
   T8 [test]    E2E: Recursive ecosystem builds SaaS app
 
@@ -1147,10 +1147,10 @@ examples/
 ### Phase 8: Recursive + RBAC + MCP Gateway
 
 **Examples to add:**
-- `recursive-ecosystem.yaml` — Cell that spawns sub-formation
-- `rbac-roles.yaml` — Role definitions (admin, developer, viewer)
-- `mcp-gateway-config.yaml` — MCP Gateway deployment config
-- `spawn-policy-approval.yaml` — Cell with spawnPolicy: approval_required
+- (done) `recursive-ecosystem.yaml` — Cell that spawns sub-formation
+- (done) `rbac-roles.yaml` — Role definitions (admin, project-lead, researcher, observer)
+- (done) `mcp-gateway-config.yaml` — MCP Gateway deployment config
+- (done) `spawn-policy-approval.yaml` — Cell with spawnPolicy: approval_required
 
 **Integration tests:**
 - Recursion safety: maxDepth enforced (depth 3 → depth 4 rejected)
@@ -1160,9 +1160,9 @@ examples/
 - Budget reclaim: child deleted → budget returned to parent
 - SpawnRequest workflow: request → approve → Cell created
 - SpawnRequest workflow: request → reject → no Cell
-- RBAC role matching: admin can create, viewer cannot
-- RBAC namespace scoping: role applies only in scope
-- MCP Gateway: tool discovery → kais_launch_team → results
+- (done) RBAC role matching: admin can create, viewer cannot
+- (done) RBAC namespace scoping: role applies only in scope
+- (done) MCP Gateway: tool discovery → kais_launch_team → results
 - NATS auth: Cell can only pub/sub its own subjects
 - NATS auth: topology bypass attempt → rejected
 - Audit log: all operations recorded
@@ -1173,11 +1173,11 @@ examples/
   - Budget flows down tree correctly
   - Delete root → cascade deletes entire tree
   - maxDepth exceeded → spawn rejected with error
-- `rbac-enforcement.test.ts`:
+- (done) `rbac-enforcement.test.ts`:
   - Admin user creates Formation → success
   - Viewer user creates Formation → 403 rejected
   - Token auth: valid token → authenticated, expired → rejected
-- `mcp-gateway.test.ts`:
+- (done) `mcp-gateway.test.ts`:
   - MCP SSE server starts, tools discoverable
   - kais_launch_team → Formation created → Mission runs
   - kais_recall → knowledge returned

@@ -66,6 +66,27 @@ spec:
                 formationRef:
                   type: string
                   description: Reference to the Formation this Cell belongs to
+                recursion:
+                  type: object
+                  description: Recursive spawning configuration
+                  properties:
+                    maxDepth:
+                      type: integer
+                      default: 5
+                      description: Maximum spawn depth from this Cell
+                    maxDescendants:
+                      type: integer
+                      default: 50
+                      description: Maximum total descendants (all levels)
+                    spawnPolicy:
+                      type: string
+                      enum: ["open", "approval_required", "blueprint_only", "disabled"]
+                      default: open
+                      description: |
+                        open: Cell can spawn any children
+                        approval_required: spawn queued for human approval
+                        blueprint_only: Cell can only instantiate registered Blueprints
+                        disabled: Cell cannot spawn children
               required: ["mind"]
             status:
               type: object

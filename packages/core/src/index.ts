@@ -194,3 +194,31 @@ export type {
   RoleSpec,
   StaticTokenEntry,
 } from './rbac-types.js';
+
+// Recursion / Budget / SpawnRequest schemas
+export {
+  BudgetBalanceSchema,
+  BudgetLedgerEntrySchema,
+  BudgetOperationSchema,
+  CellTreeNodeSchema,
+  RecursionSpecSchema,
+  RequestedCellSpecSchema,
+  SpawnPolicySchema,
+  SpawnRequestPhaseSchema,
+  SpawnRequestSchema,
+  SpawnValidationResultSchema,
+} from './recursion-schemas.js';
+
+// Recursion / Budget / SpawnRequest types
+export type {
+  BudgetBalance,
+  BudgetLedgerEntry,
+  BudgetOperation,
+  CellTreeNode,
+  RecursionSpec,
+  RequestedCellSpec,
+  SpawnPolicy,
+  SpawnRequest,
+  SpawnRequestPhase,
+  SpawnValidationResult,
+} from './recursion-types.js';
