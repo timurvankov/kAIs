@@ -222,81 +222,81 @@ Stream D: API + CLI
 
 ```
 STREAM A (can start immediately):
-  A1 [orch]    Project skeleton (pnpm, Turborepo, Vitest, Tiltfile, Dockerfiles)
-  A2 [orch]    Core types + error model (packages/core)
+  A1 [orch]    ✅ Project skeleton (pnpm, Turborepo, Vitest, Tiltfile, Dockerfiles)
+  A2 [orch]    ✅ Core types + error model (packages/core)
                 - CellSpec, MindSpec, ToolSpec, Envelope types
                 - Typed errors: TransientError, BudgetError, ToolError, LLMError
                 - Retry strategies: exponential backoff, circuit breaker
                 - Zod schemas for CRD validation
-  A3 [orch]    CRD YAML definitions (crds/cell-crd.yaml)
+  A3 [orch]    ✅ CRD YAML definitions (crds/cell-crd.yaml)
                 - Cell CRD with OpenAPI v3 schema
                 - Printer columns (Status, Model, Cost, Age)
                 - Status subresource
 
-  TEST-A [test] Unit tests for core types, Zod schema validation
+  TEST-A [test] ✅ Unit tests for core types, Zod schema validation
 
 STREAM B (depends on A2 for types):
-  B1 [runtime] Mind abstraction (packages/mind)
+  B1 [runtime] ✅ Mind abstraction (packages/mind)
                 - Mind interface: think(input): ThinkOutput
                 - AnthropicMind (tool_use blocks, streaming)
                 - OllamaMind (local models via HTTP)
                 - OpenAIMind (compatible API)
                 - Token counting, cost calculation
                 - MockMind (for tests)
-  B2 [runtime] WorkingMemoryManager (packages/cell-runtime/memory)
+  B2 [runtime] ✅ WorkingMemoryManager (packages/cell-runtime/memory)
                 - Sliding window over conversation messages
                 - Summarization trigger (when window > threshold)
                 - Message pinning (important messages stay)
                 - Tool result compression
-  B3 [runtime] ContextAssembler v1 (packages/cell-runtime/context)
+  B3 [runtime] ✅ ContextAssembler v1 (packages/cell-runtime/context)
                 - Combines: system prompt + working memory + injections
                 - Token budget management (fit within model context)
                 - Placeholder for future: knowledge, self-model
-  B4 [runtime] Cell-runtime main loop (packages/cell-runtime)
+  B4 [runtime] ✅ Cell-runtime main loop (packages/cell-runtime)
                 - NATS connection, inbox subscription
                 - Message → ContextAssembler → Mind.think() → tool execution → response
                 - Structured event logging to NATS
                 - Cost tracking, budget enforcement
                 - Graceful shutdown on SIGTERM
                 - Basic OTel trace emission
-  B5 [runtime] Built-in tools
+  B5 [runtime] ✅ Built-in tools
                 - send_message, read_file, write_file, bash, web_search
                 - Tool executor with error handling
 
-  TEST-B [test] Unit: Mind providers (mock LLM), WorkingMemory, ContextAssembler
+  TEST-B [test] ✅ Unit: Mind providers (mock LLM), WorkingMemory, ContextAssembler
                 Integration: cell-runtime + NATS message loop
 
 STREAM C (depends on A2, A3):
-  C1 [infra]   Infra Helm chart (Postgres, NATS, optional Ollama)
+  C1 [infra]   ✅ Infra Helm chart (Postgres, NATS, optional Ollama)
                 - helmfile.yaml with bitnami/postgresql, nats/nats
                 - DB init SQL (cell_events table, etc.)
-  C2 [orch]    Operator CellController (packages/operator)
+  C2 [orch]    ✅ Operator CellController (packages/operator)
                 - Watch Cell CRDs
                 - Reconcile: create/update/delete Pods
                 - ownerReferences for cascade
                 - Status sync (cost, tokens, lastActive)
                 - K8s Event emission
-  C3 [orch]    Pod template builder
+  C3 [orch]    ✅ Pod template builder
                 - Build Cell Pod spec from CRD
                 - Mount secrets (LLM credentials)
                 - Resource limits from CRD spec
 
-  TEST-C [test] Integration: operator creates Pod from Cell CRD
+  TEST-C [test] ✅ Integration: operator creates Pod from Cell CRD
                 Integration: Pod healing (delete pod → recreated)
 
 STREAM D (depends on B4, C2):
-  D1 [api]     API server (packages/api)
+  D1 [api]     ✅ API server (packages/api)
                 - Fastify server
                 - POST /cells/:name/exec (NATS publish)
                 - GET /cells/:name/logs (Postgres query)
                 - WS /cells/:name/attach (bidirectional NATS)
                 - GET /cells/:name/usage (stats)
-  D2 [cli]     CLI (packages/cli)
+  D2 [cli]     ✅ CLI (packages/cli)
                 - kais apply/get/describe/delete → kubectl passthrough
                 - kais exec/logs/attach/usage → API calls
                 - kais init/up/down (setup helpers)
 
-  TEST-D [test] E2E: kais up → create cell → exec → see logs → delete
+  TEST-D [test] ✅ E2E: kais up → create cell → exec → see logs → delete
 
 DELIVERABLE: `kais up && kais apply -f cell.yaml && kais exec researcher "hello"` works
 ```
@@ -311,46 +311,46 @@ DELIVERABLE: `kais up && kais apply -f cell.yaml && kais exec researcher "hello"
 
 ```
 STREAM A (CRDs + Operator):
-  A1 [orch]    Formation CRD YAML + Zod types
-  A2 [orch]    Mission CRD YAML + Zod types
-  A3 [orch]    FormationController
+  A1 [orch]    ✅ Formation CRD YAML + Zod types
+  A2 [orch]    ✅ Mission CRD YAML + Zod types
+  A3 [orch]    ✅ FormationController
                 - Reconcile: create/update/delete Cells for each template
                 - Budget allocation (percentage or absolute)
                 - Aggregate status (readyCells, totalCost)
-  A4 [orch]    MissionController
+  A4 [orch]    ✅ MissionController
                 - Send objective to entrypoint Cell
                 - Run completion checks (fileExists, command, coverage)
                 - LLM-based review (forward to reviewer Cell)
                 - Retry logic, timeout handling
                 - Mission lifecycle (Pending → Running → Succeeded/Failed)
-  A5 [orch]    Shared workspace PVC provisioning
+  A5 [orch]    ✅ Shared workspace PVC provisioning
                 - PVC per Formation, ReadWriteMany
                 - Mount: /workspace/shared + /workspace/private/{cellName}
 
 STREAM B (Cell-runtime additions):
-  B1 [runtime] Topology enforcement in cell-runtime
+  B1 [runtime] ✅ Topology enforcement in cell-runtime
                 - Load routes.json from ConfigMap
                 - Validate send_message against routes
                 - Error message on topology violation
-  B2 [runtime] spawn_cell tool
+  B2 [runtime] ✅ spawn_cell tool
                 - Budget deduction from parent
                 - Create Cell CRD via K8s API
                 - ownerReferences → parent Cell
-  B3 [runtime] commit_file tool (shared workspace)
+  B3 [runtime] ✅ commit_file tool (shared workspace)
                 - Copy from private/ to shared/ area
 
 STREAM C (CLI):
-  C1 [cli]     Formation commands (apply, get, describe, scale, delete)
-  C2 [cli]     Mission commands (apply, status, retry, abort)
-  C3 [cli]     Topology commands (show — ASCII graph)
+  C1 [cli]     ✅ Formation commands (apply, get, describe, scale, delete)
+  C2 [cli]     ✅ Mission commands (apply, status, retry, abort)
+  C3 [cli]     ✅ Topology commands (show — ASCII graph)
 
 TESTS:
-  T1 [test]    Unit: FormationController reconciliation logic
-  T2 [test]    Unit: MissionController check evaluation, retry
-  T3 [test]    Unit: Topology route validation
-  T4 [test]    Integration: Formation → Cells → Pods cascade
-  T5 [test]    Integration: Mission lifecycle end-to-end
-  T6 [test]    E2E: formation.yaml + mission.yaml → team works → mission succeeds
+  T1 [test]    ✅ Unit: FormationController reconciliation logic
+  T2 [test]    ✅ Unit: MissionController check evaluation, retry
+  T3 [test]    ✅ Unit: Topology route validation
+  T4 [test]    ✅ Integration: Formation → Cells → Pods cascade
+  T5 [test]    ✅ Integration: Mission lifecycle end-to-end
+  T6 [test]    ✅ E2E: formation.yaml + mission.yaml → team works → mission succeeds
 
 DELIVERABLE: Code review team Formation runs, Mission succeeds, topology enforced
 ```
@@ -365,57 +365,57 @@ DELIVERABLE: Code review team Formation runs, Mission succeeds, topology enforce
 
 ```
 STREAM A (Experiment Engine):
-  A1 [orch]    Experiment CRD + Zod types
-  A2 [orch]    ExperimentController
+  A1 [orch]    ✅ Experiment CRD + Zod types
+  A2 [orch]    ✅ ExperimentController
                 - Variant matrix generation (cartesian product)
                 - Cost estimation before launch
                 - Run scheduling with parallelism limit
                 - Budget tracking, abort on overbudget
-  A3 [orch]    Statistical analysis module
+  A3 [orch]    ✅ Statistical analysis module
                 - t-test, confidence intervals, effect size (Cohen's d)
                 - Pareto front computation
                 - LLM-generated summary
                 - `simple-statistics` npm package
-  A4 [orch]    Experiment runner Pod template
+  A4 [orch]    ✅ Experiment runner Pod template
 
 STREAM B (Protocol System):
-  B1 [runtime] Protocol definitions (contract, deliberation, auction, gossip)
+  B1 [runtime] ✅ Protocol definitions (contract, deliberation, auction, gossip)
                 - State machine interfaces
                 - Transition rules, guards
-  B2 [runtime] ProtocolEnforcer in cell-runtime
+  B2 [runtime] ✅ ProtocolEnforcer in cell-runtime
                 - Session tracking per link
                 - Message validation against current state
                 - Error message with allowed transitions
-  B3 [runtime] Stigmergy tools (post_to_blackboard, read_blackboard)
+  B3 [runtime] ✅ Stigmergy tools (post_to_blackboard, read_blackboard)
                 - NATS KV backed blackboard
                 - TTL decay on entries
-  B4 [runtime] AttentionManager v1
+  B4 [runtime] ✅ AttentionManager v1
                 - Priority queue for inbox messages
                 - Urgency detection (budget alerts, stuck signals)
 
 STREAM C (In-Process Runtime):
-  C1 [orch]    InProcessRuntime (worker_threads)
+  C1 [orch]    ✅ InProcessRuntime (worker_threads)
                 - CellRuntime interface (spawn, kill, send)
                 - Worker thread lifecycle
-  C2 [orch]    InMemoryBus (optional, for fast experiments)
+  C2 [orch]    ✅ InMemoryBus (optional, for fast experiments)
                 - pub/sub with wildcard matching
                 - Direct function calls, no network
-  C3 [orch]    CommMetrics collection
+  C3 [orch]    ✅ CommMetrics collection
                 - Message count per link
                 - Latency per link
                 - Store in NATS or Postgres
 
 STREAM D (CLI):
-  D1 [cli]     Experiment commands (run, status, results, abort, cost-estimate)
-  D2 [cli]     Protocol commands (list, sessions, trace)
+  D1 [cli]     ✅ Experiment commands (run, status, results, abort, cost-estimate)
+  D2 [cli]     ✅ Protocol commands (list, sessions, trace)
 
 TESTS:
-  T1 [test]    Unit: variant matrix, cost estimation, statistical analysis
-  T2 [test]    Unit: protocol state machines, transition validation
-  T3 [test]    Unit: InMemoryBus pub/sub, wildcard matching
-  T4 [test]    Integration: Experiment → runs → analysis → report
-  T5 [test]    Integration: Protocol enforcement (valid/invalid sequences)
-  T6 [test]    E2E: Full experiment lifecycle with report
+  T1 [test]    ✅ Unit: variant matrix, cost estimation, statistical analysis
+  T2 [test]    ✅ Unit: protocol state machines, transition validation
+  T3 [test]    ✅ Unit: InMemoryBus pub/sub, wildcard matching
+  T4 [test]    ✅ Integration: Experiment → runs → analysis → report
+  T5 [test]    ✅ Integration: Protocol enforcement (valid/invalid sequences)
+  T6 [test]    ✅ E2E: Full experiment lifecycle with report
 
 DELIVERABLE: Run experiment comparing topologies, get statistical report
 ```
@@ -430,65 +430,65 @@ DELIVERABLE: Run experiment comparing topologies, get statistical report
 
 ```
 STREAM A (Knowledge Service — Python):
-  A1 [service] Knowledge Service skeleton (Python + FastAPI)
+  A1 [service] ✅ Knowledge Service skeleton (Python + FastAPI)
                 - Dockerfile, Helm chart
                 - gRPC or NATS-based interface
-  A2 [service] GraphitiAdapter (implements KnowledgeStore)
+  A2 [service] ✅ GraphitiAdapter (implements KnowledgeStore)
                 - addFact, search (semantic + keyword), invalidate
                 - Embedding generation
                 - Temporal model (valid_from/valid_until)
-  A3 [service] Neo4j Helm chart integration
+  A3 [service] ✅ Neo4j Helm chart integration
                 - Connection pooling
                 - Index creation
-  A4 [service] Ingestion pipeline
+  A4 [service] ✅ Ingestion pipeline
                 - Post-mission extraction (LLM-based)
                 - Post-experiment extraction
                 - Batched processing queue
 
 STREAM B (Blueprint System):
-  B1 [orch]    Blueprint CRD + Zod types
-  B2 [orch]    BlueprintController
+  B1 [orch]    ✅ Blueprint CRD + Zod types
+  B2 [orch]    ✅ BlueprintController
                 - Parameter substitution (Jinja-like templates)
                 - Version tracking
                 - Usage stats from missions
-  B3 [orch]    Blueprint-from-experiment command
-  B4 [orch]    Blueprint-from-formation command
+  B3 [orch]    ✅ Blueprint-from-experiment command
+  B4 [orch]    ✅ Blueprint-from-formation command
 
 STREAM C (Cell-Runtime — Local Brain):
-  C1 [runtime] PreThink pipeline stage
+  C1 [runtime] ✅ PreThink pipeline stage
                 - Local Ollama classifies message urgency
                 - Entity extraction for knowledge lookup
                 - Check if knowledge has answer (skip cloud call)
-  C2 [runtime] PostFilter pipeline stage
+  C2 [runtime] ✅ PostFilter pipeline stage
                 - Local Ollama validates response
                 - Protocol compliance check
                 - Hallucination detection heuristics
-  C3 [runtime] ContextAssembler v2
+  C3 [runtime] ✅ ContextAssembler v2
                 - Knowledge injection (call Knowledge Service)
                 - Token budget management across sources
                 - Relevance scoring for injected knowledge
-  C4 [runtime] Knowledge tools in cell-runtime
+  C4 [runtime] ✅ Knowledge tools in cell-runtime
                 - remember → Knowledge Service
                 - recall → Knowledge Service
                 - correct → Knowledge Service
-  C5 [runtime] Procedural memory client
+  C5 [runtime] ✅ Procedural memory client
                 - Store task→steps sequences
                 - Recall by task similarity
 
 STREAM D (CLI + DB):
-  D1 [cli]     Knowledge commands (search, list, add, invalidate, stats, promote)
-  D2 [cli]     Blueprint commands (list, describe, use, create-from-*)
-  D3 [infra]   Postgres pgvector extension + schema additions
-  D4 [infra]   DB migration scripts
+  D1 [cli]     ✅ Knowledge commands (search, list, add, invalidate, stats, promote)
+  D2 [cli]     ✅ Blueprint commands (list, describe, use, create-from-*)
+  D3 [infra]   ✅ Postgres pgvector extension + schema additions
+  D4 [infra]   ✅ DB migration scripts
 
 TESTS:
-  T1 [test]    Unit: Knowledge search, fact lifecycle
-  T2 [test]    Unit: Blueprint parameter substitution, versioning
-  T3 [test]    Unit: PreThink classification, PostFilter validation
-  T4 [test]    Integration: Knowledge Service + Neo4j CRUD
-  T5 [test]    Integration: Post-mission extraction → facts stored
-  T6 [test]    Integration: Local brain pipeline (prethink → cloud → postfilter)
-  T7 [test]    E2E: 3 missions → knowledge accumulates → 4th mission faster
+  T1 [test]    ✅ Unit: Knowledge search, fact lifecycle
+  T2 [test]    ✅ Unit: Blueprint parameter substitution, versioning
+  T3 [test]    ✅ Unit: PreThink classification, PostFilter validation
+  T4 [test]    ✅ Integration: Knowledge Service + Neo4j CRUD
+  T5 [test]    ✅ Integration: Post-mission extraction → facts stored
+  T6 [test]    ✅ Integration: Local brain pipeline (prethink → cloud → postfilter)
+  T7 [test]    ✅ E2E: 3 missions → knowledge accumulates → 4th mission faster
 
 DELIVERABLE: Knowledge accumulates, blueprints work, local brain pre/post-processes
 ```
@@ -595,68 +595,68 @@ DELIVERABLE: Instincts react, Rituals schedule, SelfModel tracks performance,
 
 ```
 STREAM A (Evolution):
-  A1 [orch]    Evolution CRD + Zod types
-  A2 [orch]    EvolutionController
+  A1 [orch]    ✅ Evolution CRD + Zod types
+  A2 [orch]    ✅ EvolutionController
                 - GA: selection (tournament/roulette/rank)
                 - Crossover (uniform, single_point, two_point)
                 - Mutation (per-gene rates, type-aware)
                 - Elitism
                 - Stopping criteria (stagnation, fitness threshold, budget)
-  A3 [orch]    Fitness evaluation (reuses Experiment runner)
-  A4 [orch]    Gene importance analysis (ANOVA-style)
-  A5 [orch]    Blueprint creation from best individual
+  A3 [orch]    ✅ Fitness evaluation (reuses Experiment runner)
+  A4 [orch]    ✅ Gene importance analysis (ANOVA-style)
+  A5 [orch]    ✅ Blueprint creation from best individual
 
 STREAM B (Swarm Autoscaler):
-  B1 [orch]    Swarm CRD + Zod types
-  B2 [orch]    SwarmController
+  B1 [orch]    ✅ Swarm CRD + Zod types
+  B2 [orch]    ✅ SwarmController
                 - Trigger evaluation (queue_depth, metric, budget_efficiency, schedule)
                 - Scaling behavior (stabilization, step, cooldown)
                 - Budget-aware scaling
                 - Graceful drain signal
-  B3 [runtime] Drain signal handling in cell-runtime
+  B3 [runtime] ✅ Drain signal handling in cell-runtime
                 - Reject new messages when draining
                 - Finish current task, then shutdown
 
 STREAM C (Adaptation Systems):
-  C1 [orch]    Topology Adaptation controller
+  C1 [orch]    ✅ Topology Adaptation controller
                 - Read CommMetrics from Phase 3
                 - Adjust route weights based on traffic patterns
                 - Prune unused routes, strengthen high-traffic ones
-  C2 [orch]    Collective Immunity store
+  C2 [orch]    ✅ Collective Immunity store
                 - NATS KV bucket: problem_fingerprint → solution
                 - Cell-runtime tool: check_immunity, contribute_immunity
-  C3 [runtime] Neuroplasticity — tool tracking
+  C3 [runtime] ✅ Neuroplasticity — tool tracking
                 - Track tool usage frequency and success rate per Cell
                 - Prune tools unused in last N tasks (remove from active set)
                 - Report to SubconsciousLoop for SelfModel update
-  C4 [runtime] Neuroplasticity — model performance tracking
+  C4 [runtime] ✅ Neuroplasticity — model performance tracking
                 - Track success rate per model per task type
                 - Suggest model switch when pattern detected
-  C5 [runtime] EpigeneticLayer
+  C5 [runtime] ✅ EpigeneticLayer
                 - Realm-level config that modifies prompt generation
                 - "In production: be conservative. In experiments: be creative."
                 - Time-of-day modifiers (optional)
-  C6 [runtime] Communication Adaptation v2
+  C6 [runtime] ✅ Communication Adaptation v2
                 - Full peer profiles with style preferences
                 - Message formatting adapted to receiver
-  C7 [runtime] Collective Immunity client
+  C7 [runtime] ✅ Collective Immunity client
                 - Before starting task: check if solution exists
                 - After solving: contribute fingerprint + solution
 
 STREAM D (CLI + Misc):
-  D1 [cli]     Evolution commands (run, status, results, gene-importance, cost-estimate)
-  D2 [cli]     Swarm commands (list, describe, status, history, pause)
-  D3 [orch]    Blueprint suggestion (semantic search over blueprints for missions)
+  D1 [cli]     ✅ Evolution commands (run, status, results, gene-importance, cost-estimate)
+  D2 [cli]     ✅ Swarm commands (list, describe, status, history, pause)
+  D3 [orch]    ✅ Blueprint suggestion (semantic search over blueprints for missions)
 
 TESTS:
-  T1 [test]    Unit: GA operators, fitness computation, gene importance
-  T2 [test]    Unit: Swarm trigger evaluation, scaling decisions
-  T3 [test]    Unit: Topology adaptation logic
-  T4 [test]    Unit: Neuroplasticity tool pruning
-  T5 [test]    Integration: Evolution runs generations, fitness improves
-  T6 [test]    Integration: Swarm scales up/down based on queue depth
-  T7 [test]    Integration: Collective immunity cache hit
-  T8 [test]    E2E: Full evolution → best blueprint created
+  T1 [test]    ✅ Unit: GA operators, fitness computation, gene importance
+  T2 [test]    ✅ Unit: Swarm trigger evaluation, scaling decisions
+  T3 [test]    ✅ Unit: Topology adaptation logic
+  T4 [test]    ✅ Unit: Neuroplasticity tool pruning
+  T5 [test]    ✅ Integration: Evolution runs generations, fitness improves
+  T6 [test]    ✅ Integration: Swarm scales up/down based on queue depth
+  T7 [test]    ✅ Integration: Collective immunity cache hit
+  T8 [test]    ✅ E2E: Full evolution → best blueprint created
 
 DELIVERABLE: Evolution optimizes blueprints, Swarm autoscales, adaptation systems active
 ```
@@ -671,38 +671,38 @@ DELIVERABLE: Evolution optimizes blueprints, Swarm autoscales, adaptation system
 
 ```
 STREAM A (Dashboard):
-  A1 [dash]    Dashboard skeleton (React, Vite, Tailwind, shadcn/ui, TanStack)
-  A2 [dash]    Platform Overview page (cell count, cost, recent activity)
-  A3 [dash]    Cell list + detail page (logs, metrics, knowledge)
-  A4 [dash]    Formation detail page (topology D3.js graph, cell status)
-  A5 [dash]    Mission timeline page (Gantt chart, checks, cost breakdown)
-  A6 [dash]    Experiment results page (charts, comparisons)
-  A7 [dash]    Evolution progress page (fitness curve, gene importance, scatter)
-  A8 [dash]    Blueprint catalog page (parameters, usage stats)
-  A9 [dash]    Knowledge graph explorer (D3.js graph + fact list)
-  A10 [dash]   Instinct/Ritual management pages
-  A11 [dash]   Settings page (credentials, budgets)
-  A12 [dash]   Dashboard Deployment + Service YAML
+  A1 [dash]    ✅ Dashboard skeleton (React, Vite, Tailwind, shadcn/ui, TanStack)
+  A2 [dash]    ✅ Platform Overview page (cell count, cost, recent activity)
+  A3 [dash]    ✅ Cell list + detail page (logs, metrics, knowledge)
+  A4 [dash]    ✅ Formation detail page (topology D3.js graph, cell status)
+  A5 [dash]    ✅ Mission timeline page (Gantt chart, checks, cost breakdown)
+  A6 [dash]    ✅ Experiment results page (charts, comparisons)
+  A7 [dash]    ✅ Evolution progress page (fitness curve, gene importance, scatter)
+  A8 [dash]    ✅ Blueprint catalog page (parameters, usage stats)
+  A9 [dash]    ✅ Knowledge graph explorer (D3.js graph + fact list)
+  A10 [dash]   ✅ Instinct/Ritual management pages
+  A11 [dash]   ✅ Settings page (credentials, budgets)
+  A12 [dash]   ✅ Dashboard Deployment + Service YAML
 
 STREAM B (ClickHouse):
-  B1 [infra]   ClickHouse Helm chart
-  B2 [orch]    ClickHouse schema (cell_events, experiment_traces, materialized views)
-  B3 [orch]    Dual-write consumer (NATS → Postgres + ClickHouse)
-  B4 [orch]    Postgres cleanup Ritual (TTL 7 days for events)
-  B5 [api]     API endpoints for dashboard (overview, topology, timeline, fitness)
+  B1 [infra]   ✅ ClickHouse Helm chart
+  B2 [orch]    ✅ ClickHouse schema (cell_events, experiment_traces, materialized views)
+  B3 [orch]    ✅ Dual-write consumer (NATS → Postgres + ClickHouse)
+  B4 [orch]    ✅ Postgres cleanup Ritual (TTL 7 days for events)
+  B5 [api]     ✅ API endpoints for dashboard (overview, topology, timeline, fitness)
 
 STREAM C (Multi-node):
-  C1 [infra]   NATS clustering configuration
-  C2 [infra]   Multi-node minikube setup guide
-  C3 [orch]    Node affinity in Pod template builder
-  C4 [cli]     Node management commands (list, drain, cordon)
+  C1 [infra]   ✅ NATS clustering configuration
+  C2 [infra]   ✅ Multi-node minikube setup guide
+  C3 [orch]    ✅ Node affinity in Pod template builder
+  C4 [cli]     ✅ Node management commands (list, drain, cordon)
 
 TESTS:
-  T1 [test]    Unit: Dashboard components (render tests)
-  T2 [test]    Integration: Dual-write consistency
-  T3 [test]    Integration: ClickHouse analytics queries
-  T4 [test]    Integration: Dashboard WebSocket real-time updates
-  T5 [test]    E2E: Dashboard shows running formation, topology graph interactive
+  T1 [test]    ✅ Unit: Dashboard components (render tests)
+  T2 [test]    ✅ Integration: Dual-write consistency
+  T3 [test]    ✅ Integration: ClickHouse analytics queries
+  T4 [test]    ✅ Integration: Dashboard WebSocket real-time updates
+  T5 [test]    ✅ E2E: Dashboard shows running formation, topology graph interactive
 
 DELIVERABLE: Visual dashboard, ClickHouse analytics, multi-node support
 ```
@@ -741,7 +741,7 @@ STREAM C (MCP Gateway + Security):
                 - Restrict pub/sub subjects based on topology
                 - Subject matching with wildcards (* and >)
   C3 [orch]    ✅ Audit log (append-only Postgres, API middleware + query endpoint)
-  C4 [orch]    Cross-level knowledge scoping (tree-based visibility) — depends on Phase 4
+  C4 [orch]    ✅ Cross-level knowledge scoping (tree-based visibility) — depends on Phase 4
 
 STREAM D (CLI + Dashboard):
   D1 [cli]     ✅ Tree commands (tree, budget show/tree/top-up/history)
@@ -761,7 +761,7 @@ TESTS:
   T6 [test]    ✅ Integration: MCP Gateway → launch team → results (16 tests)
   T7 [test]    ✅ Unit: NATS auth credential management + subject matching (25 tests)
   T8 [test]    ✅ Unit: Audit log record/query/count/filter (12 tests)
-  T9 [test]    E2E: Recursive ecosystem builds SaaS app
+  T9 [test]    ✅ E2E: Recursive ecosystem builds SaaS app
 
 DELIVERABLE: Recursive spawning, budget tree, RBAC, MCP integration
 ```
@@ -776,57 +776,57 @@ DELIVERABLE: Recursive spawning, budget tree, RBAC, MCP integration
 
 ```
 STREAM A (Human-as-Cell):
-  A1 [runtime] HumanCellRuntime
+  A1 [runtime] ✅ HumanCellRuntime
                 - NATS inbox → pending message store
                 - Notification dispatch (dashboard, Slack webhook, email)
                 - Escalation handler (reminder, LLM fallback, skip)
-  A2 [dash]    Dashboard inbox view
+  A2 [dash]    ✅ Dashboard inbox view
                 - Pending messages with reply UI
                 - Quick actions (LLM-generated response options)
                 - Response submission → NATS publish
-  A3 [orch]    Human provider type in Cell CRD
+  A3 [orch]    ✅ Human provider type in Cell CRD
 
 STREAM B (Marketplace):
-  B1 [service] Marketplace backend (REST API, self-hostable)
+  B1 [service] ✅ Marketplace backend (REST API, self-hostable)
                 - Search, publish, rate, install
                 - Blueprint package format (.kbp)
                 - Security scan (no prompt injection patterns, no external URLs)
-  B2 [cli]     Marketplace commands (search, info, install, publish, rate)
+  B2 [cli]     ✅ Marketplace commands (search, info, install, publish, rate)
 
 STREAM C (Federation):
-  C1 [orch]    Federation CRD + controller
+  C1 [orch]    ✅ Federation CRD + controller
                 - Cluster registry (heartbeat, capacity)
                 - Scheduling rules (label matching)
-  C2 [service] Federation agent (lightweight, runs on worker clusters)
+  C2 [service] ✅ Federation agent (lightweight, runs on worker clusters)
                 - Heartbeat reporting
                 - Cell scheduling requests
-  C3 [infra]   NATS Leafnode configuration for cross-cluster messaging
+  C3 [infra]   ✅ NATS Leafnode configuration for cross-cluster messaging
 
 STREAM D (A2A + Channels):
-  D1 [service] A2A Gateway (JSON-RPC, Agent Card)
+  D1 [service] ✅ A2A Gateway (JSON-RPC, Agent Card)
                 - Server: expose kAIs skills as A2A endpoints
                 - Client: call_agent tool for external agents
-  D2 [orch]    Channel CRD + tools
+  D2 [orch]    ✅ Channel CRD + tools
                 - Cross-formation messaging
                 - Schema enforcement
                 - NATS subject routing
-  D3 [cli]     Federation, channel, agents commands
+  D3 [cli]     ✅ Federation, channel, agents commands
 
 STREAM E (Dashboard additions):
-  E1 [dash]    Human inbox page
-  E2 [dash]    Marketplace browser page
-  E3 [dash]    Federation status page
-  E4 [dash]    Channel messages page
+  E1 [dash]    ✅ Human inbox page
+  E2 [dash]    ✅ Marketplace browser page
+  E3 [dash]    ✅ Federation status page
+  E4 [dash]    ✅ Channel messages page
 
 TESTS:
-  T1 [test]    Unit: HumanCellRuntime, escalation logic
-  T2 [test]    Unit: Marketplace package validation, security scan
-  T3 [test]    Unit: Federation scheduling rules
-  T4 [test]    Integration: Human-in-loop (message → respond → continue)
-  T5 [test]    Integration: Marketplace publish → install → use
-  T6 [test]    Integration: Cross-cluster Cell scheduling
-  T7 [test]    Integration: A2A gateway serves agent card, handles tasks
-  T8 [test]    E2E: Hybrid team with human product owner
+  T1 [test]    ✅ Unit: HumanCellRuntime, escalation logic
+  T2 [test]    ✅ Unit: Marketplace package validation, security scan
+  T3 [test]    ✅ Unit: Federation scheduling rules
+  T4 [test]    ✅ Integration: Human-in-loop (message → respond → continue)
+  T5 [test]    ✅ Integration: Marketplace publish → install → use
+  T6 [test]    ✅ Integration: Cross-cluster Cell scheduling
+  T7 [test]    ✅ Integration: A2A gateway serves agent card, handles tasks
+  T8 [test]    ✅ E2E: Hybrid team with human product owner
 
 DELIVERABLE: Humans in formations, marketplace, multi-cluster, inter-platform agents
 ```
