@@ -539,3 +539,244 @@ export const BlueprintStatusSchema = z.object({
   avgSuccessRate: z.number().min(0).max(1).optional(),
   versions: z.array(BlueprintVersionSchema).optional(),
 });
+
+// ========== Phase 6: Evolution ==========
+
+export const EvolutionSelectionSchema = z.enum(['tournament', 'roulette', 'rank']);
+
+export const EvolutionCrossoverSchema = z.enum(['uniform', 'single_point', 'two_point']);
+
+export const EvolutionMutationSchema = z.object({
+  rate: z.number().min(0).max(1),
+  perGene: z.boolean().default(true),
+});
+
+export const EvolutionStoppingSchema = z.object({
+  maxGenerations: z.number().int().positive(),
+  stagnationLimit: z.number().int().positive().optional(),
+  fitnessThreshold: z.number().optional(),
+  budgetLimit: z.number().positive().optional(),
+});
+
+export const EvolutionSpecSchema = z.object({
+  populationSize: z.number().int().positive().min(2),
+  selection: EvolutionSelectionSchema.default('tournament'),
+  crossover: EvolutionCrossoverSchema.default('uniform'),
+  mutation: EvolutionMutationSchema,
+  elitism: z.number().int().nonnegative().default(1),
+  stopping: EvolutionStoppingSchema,
+  genes: z.array(z.object({
+    name: z.string().min(1),
+    type: z.enum(['enum', 'numeric', 'string']),
+    values: z.array(z.unknown()).optional(),
+    min: z.number().optional(),
+    max: z.number().optional(),
+  })).min(1),
+  fitness: z.object({
+    metrics: z.array(z.string().min(1)).min(1),
+    weights: z.record(z.string(), z.number()).optional(),
+  }),
+  template: z.object({
+    kind: z.literal('Formation'),
+    spec: z.unknown(),
+  }),
+  mission: ExperimentMissionSchema,
+  runtime: ExperimentRuntimeSchema.default('in-process'),
+  budget: ExperimentBudgetSchema,
+  parallel: z.number().int().positive().default(1),
+});
+
+export const EvolutionPhaseSchema = z.enum([
+  'Pending', 'Running', 'Analyzing', 'Completed', 'Failed', 'Aborted',
+]);
+
+export const EvolutionIndividualSchema = z.object({
+  id: z.string().min(1),
+  genes: z.record(z.string(), z.unknown()),
+  fitness: z.number().optional(),
+  generation: z.number().int().nonnegative(),
+});
+
+export const EvolutionStatusSchema = z.object({
+  phase: EvolutionPhaseSchema,
+  generation: z.number().int().nonnegative(),
+  bestFitness: z.number().optional(),
+  bestIndividual: EvolutionIndividualSchema.optional(),
+  populationSize: z.number().int().nonnegative(),
+  totalCost: z.number().nonnegative(),
+  geneImportance: z.record(z.string(), z.number()).optional(),
+  message: z.string().optional(),
+});
+
+// ========== Phase 6: Swarm ==========
+
+export const SwarmTriggerTypeSchema = z.enum([
+  'queue_depth', 'metric', 'budget_efficiency', 'schedule',
+]);
+
+export const SwarmTriggerSchema = z.object({
+  type: SwarmTriggerTypeSchema,
+  threshold: z.number().optional(),
+  metricName: z.string().optional(),
+  schedule: z.string().optional(),
+  above: z.number().optional(),
+  below: z.number().optional(),
+});
+
+export const SwarmScalingSchema = z.object({
+  minReplicas: z.number().int().nonnegative().default(0),
+  maxReplicas: z.number().int().positive(),
+  step: z.number().int().positive().default(1),
+  cooldownSeconds: z.number().int().positive().default(60),
+  stabilizationSeconds: z.number().int().positive().default(120),
+});
+
+export const SwarmSpecSchema = z.object({
+  cellTemplate: z.string().min(1),
+  formationRef: z.string().min(1),
+  trigger: SwarmTriggerSchema,
+  scaling: SwarmScalingSchema,
+  budget: z.object({
+    maxCostPerHour: z.number().positive().optional(),
+  }).optional(),
+  drainGracePeriodSeconds: z.number().int().positive().default(30),
+});
+
+export const SwarmPhaseSchema = z.enum(['Active', 'Suspended', 'Error']);
+
+export const SwarmStatusSchema = z.object({
+  phase: SwarmPhaseSchema,
+  currentReplicas: z.number().int().nonnegative(),
+  desiredReplicas: z.number().int().nonnegative(),
+  lastScaleTime: z.string().datetime().optional(),
+  lastTriggerValue: z.number().optional(),
+  message: z.string().optional(),
+});
+
+// ========== Phase 6: Adaptation ==========
+
+export const CollectiveImmunityEntrySchema = z.object({
+  fingerprint: z.string().min(1),
+  solution: z.string().min(1),
+  contributor: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+  hits: z.number().int().nonnegative().default(0),
+  createdAt: z.string().datetime(),
+});
+
+export const NeuroplasticityEntrySchema = z.object({
+  toolName: z.string().min(1),
+  usageCount: z.number().int().nonnegative(),
+  successCount: z.number().int().nonnegative(),
+  lastUsed: z.string().datetime().optional(),
+  pruned: z.boolean().default(false),
+});
+
+export const EpigeneticConfigSchema = z.object({
+  realm: z.string().min(1),
+  modifiers: z.record(z.string(), z.unknown()),
+  description: z.string().optional(),
+});
+
+export const TopologyAdaptationRuleSchema = z.object({
+  fromCell: z.string().min(1),
+  toCell: z.string().min(1),
+  weight: z.number().min(0).max(1),
+  messageCount: z.number().int().nonnegative(),
+  avgLatencyMs: z.number().nonnegative(),
+});
+
+// ========== Phase 9: Channel ==========
+
+export const ChannelSpecSchema = z.object({
+  formations: z.array(z.string().min(1)).min(2),
+  schema: z.unknown().optional(),
+  maxMessageSize: z.number().int().positive().default(65536),
+  retentionMinutes: z.number().int().positive().default(60),
+});
+
+export const ChannelPhaseSchema = z.enum(['Active', 'Paused', 'Error']);
+
+export const ChannelStatusSchema = z.object({
+  phase: ChannelPhaseSchema,
+  messageCount: z.number().int().nonnegative().default(0),
+  subscriberCount: z.number().int().nonnegative().default(0),
+  lastMessageAt: z.string().datetime().optional(),
+});
+
+// ========== Phase 9: Federation ==========
+
+export const FederationClusterSchema = z.object({
+  name: z.string().min(1),
+  endpoint: z.string().min(1),
+  labels: z.record(z.string(), z.string()).optional(),
+  capacity: z.object({
+    maxCells: z.number().int().positive(),
+    availableCells: z.number().int().nonnegative(),
+  }).optional(),
+  lastHeartbeat: z.string().datetime().optional(),
+});
+
+export const FederationSchedulingSchema = z.object({
+  labelSelector: z.record(z.string(), z.string()).optional(),
+  strategy: z.enum(['round_robin', 'least_loaded', 'label_match']).default('label_match'),
+});
+
+export const FederationSpecSchema = z.object({
+  clusters: z.array(FederationClusterSchema).min(1),
+  scheduling: FederationSchedulingSchema,
+  natsLeafnodePort: z.number().int().positive().default(7422),
+});
+
+export const FederationPhaseSchema = z.enum(['Pending', 'Active', 'Degraded', 'Error']);
+
+export const FederationStatusSchema = z.object({
+  phase: FederationPhaseSchema,
+  readyClusters: z.number().int().nonnegative(),
+  totalClusters: z.number().int().nonnegative(),
+  scheduledCells: z.number().int().nonnegative().default(0),
+  message: z.string().optional(),
+});
+
+// ========== Phase 9: HumanCell ==========
+
+export const HumanCellSpecSchema = z.object({
+  notifications: z.object({
+    slack: z.object({ webhookUrl: z.string() }).optional(),
+    email: z.object({ to: z.string() }).optional(),
+    dashboard: z.boolean().default(true),
+  }),
+  escalation: z.object({
+    timeoutMinutes: z.number().int().positive().default(30),
+    action: z.enum(['reminder', 'llm_fallback', 'skip']).default('reminder'),
+    fallbackModel: z.string().optional(),
+  }).optional(),
+});
+
+// ========== Phase 9: Marketplace ==========
+
+export const MarketplaceBlueprintSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().min(1),
+  description: z.string().min(1),
+  author: z.string().min(1),
+  blueprint: BlueprintSpecSchema,
+  tags: z.array(z.string()),
+  rating: z.number().min(0).max(5).optional(),
+  downloads: z.number().int().nonnegative().default(0),
+  publishedAt: z.string().datetime(),
+});
+
+// ========== Phase 9: A2A Gateway ==========
+
+export const A2AAgentCardSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+  url: z.string().min(1),
+  skills: z.array(z.object({
+    name: z.string().min(1),
+    description: z.string().min(1),
+    inputSchema: z.unknown().optional(),
+  })),
+  version: z.string().default('1.0.0'),
+});

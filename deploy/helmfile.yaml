@@ -198,6 +198,69 @@ releases:
         dashboardsConfigMaps:
           kais: kais-grafana-dashboards
 
+  # ClickHouse for analytics (Phase 7)
+  - name: clickhouse
+    namespace: kais-system
+    chart: bitnami/clickhouse
+    condition: analytics.enabled
+    values:
+      - auth:
+          username: kais
+          password: kais
+        shards: 1
+        replicaCount: 1
+        resources:
+          requests: { memory: 512Mi, cpu: 250m }
+          limits: { memory: 1Gi, cpu: 500m }
+        persistence:
+          size: 10Gi
+        initdbScripts:
+          init.sql: |
+            CREATE TABLE IF NOT EXISTS cell_events_analytics (
+                id UInt64,
+                cell_name String,
+                namespace String,
+                event_type String,
+                payload String,
+                created_at DateTime64(3)
+            ) ENGINE = MergeTree()
+            ORDER BY (namespace, cell_name, created_at);
+
+            CREATE TABLE IF NOT EXISTS experiment_traces (
+                experiment_name String,
+                run_id String,
+                variant_key String,
+                repeat UInt32,
+                metric_name String,
+                metric_value Float64,
+                cost Float64,
+                duration_ms UInt64,
+                created_at DateTime64(3)
+            ) ENGINE = MergeTree()
+            ORDER BY (experiment_name, metric_name, created_at);
+
+            CREATE TABLE IF NOT EXISTS cost_daily (
+                date Date,
+                namespace String,
+                cell_name String,
+                total_cost Float64,
+                total_tokens UInt64,
+                llm_calls UInt32
+            ) ENGINE = SummingMergeTree()
+            ORDER BY (date, namespace, cell_name);
+
+            CREATE MATERIALIZED VIEW IF NOT EXISTS cost_daily_mv
+            TO cost_daily AS
+            SELECT
+                toDate(created_at) AS date,
+                namespace,
+                cell_name,
+                sumIf(JSONExtractFloat(payload, 'cost'), event_type = 'llm_call') AS total_cost,
+                sumIf(JSONExtractUInt(payload, 'tokens'), event_type = 'llm_call') AS total_tokens,
+                countIf(event_type = 'llm_call') AS llm_calls
+            FROM cell_events_analytics
+            GROUP BY date, namespace, cell_name;
+
   # Neo4j for knowledge graph (Phase 4)
   - name: neo4j
     namespace: kais-system

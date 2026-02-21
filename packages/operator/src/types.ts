@@ -3,14 +3,22 @@ import type {
   BlueprintStatus,
   CellSpec,
   CellStatus,
+  ChannelSpec,
+  ChannelStatus,
+  EvolutionSpec,
+  EvolutionStatus,
   ExperimentSpec,
   ExperimentStatus,
+  FederationSpec,
+  FederationStatus,
   FormationSpec,
   FormationStatus,
   KnowledgeGraphSpec,
   KnowledgeGraphStatus,
   MissionSpec,
   MissionStatus,
+  SwarmSpec,
+  SwarmStatus,
 } from '@kais/core';
 import type * as k8s from '@kubernetes/client-node';
 
@@ -164,6 +172,83 @@ export interface KnowledgeGraphResource {
 }
 
 export type KnowledgeGraphEventType = 'Created' | 'Provisioning' | 'Ready' | 'Error' | 'Deleted';
+
+// Phase 6: Evolution
+export interface EvolutionResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Evolution';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: EvolutionSpec;
+  status?: EvolutionStatus;
+}
+
+export type EvolutionEventType =
+  | 'EvolutionStarted'
+  | 'GenerationCompleted'
+  | 'EvolutionCompleted'
+  | 'EvolutionFailed'
+  | 'EvolutionAborted';
+
+// Phase 6: Swarm
+export interface SwarmResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Swarm';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: SwarmSpec;
+  status?: SwarmStatus;
+}
+
+export type SwarmEventType =
+  | 'SwarmScaleUp'
+  | 'SwarmScaleDown'
+  | 'SwarmSuspended'
+  | 'SwarmError';
+
+// Phase 9: Channel
+export interface ChannelResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Channel';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: ChannelSpec;
+  status?: ChannelStatus;
+}
+
+export type ChannelEventType = 'ChannelCreated' | 'ChannelPaused' | 'ChannelError';
+
+// Phase 9: Federation
+export interface FederationResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Federation';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid?: string;
+    resourceVersion?: string;
+  };
+  spec: FederationSpec;
+  status?: FederationStatus;
+}
+
+export type FederationEventType =
+  | 'FederationActive'
+  | 'FederationDegraded'
+  | 'ClusterJoined'
+  | 'ClusterLost';
 
 /**
  * Abstraction over the K8s API calls used by CellController and FormationController.
@@ -334,6 +419,18 @@ export interface KubeClient {
 
   /** Delete a Service by name (simplified, for KnowledgeGraph cleanup). */
   deleteKnowledgeGraphService(name: string, namespace: string): Promise<void>;
+
+  // --- Evolution management ---
+  updateEvolutionStatus(name: string, namespace: string, status: EvolutionStatus): Promise<void>;
+
+  // --- Swarm management ---
+  updateSwarmStatus(name: string, namespace: string, status: SwarmStatus): Promise<void>;
+
+  // --- Channel management ---
+  updateChannelStatus(name: string, namespace: string, status: ChannelStatus): Promise<void>;
+
+  // --- Federation management ---
+  updateFederationStatus(name: string, namespace: string, status: FederationStatus): Promise<void>;
 }
 
 /**
