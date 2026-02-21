@@ -147,6 +147,53 @@ describe('Mission CRD Lifecycle', () => {
     console.log(`[test] PASSED: attempt=${status.attempt}`);
   });
 
+  it('completes a Mission with passing checks (Succeeded)', async () => {
+    console.log('[test] === Mission completes with Succeeded ===');
+    await applyCell(MISSION_CELL);
+
+    await waitFor(
+      async () => {
+        const cell = await getCustomResource('cells', 'e2e-mission-cell');
+        const status = cell?.status as { phase?: string } | undefined;
+        return status?.phase === 'Running';
+      },
+      { timeoutMs: 90_000, label: 'mission cell running' },
+    );
+
+    console.log('[test] Cell is Running. Applying Mission...');
+    await applyMission(TEST_MISSION);
+
+    // Wait for Mission to reach Succeeded — checks (echo ok) should pass
+    await waitFor(
+      async () => {
+        const mission = await getCustomResource('missions', 'e2e-test-mission');
+        if (!mission) return false;
+        const status = mission.status as {
+          phase?: string;
+          attempt?: number;
+          checks?: { name: string; status: string }[];
+        } | undefined;
+        console.log(
+          `[test] Mission: phase=${status?.phase ?? 'none'}, attempt=${status?.attempt ?? 0}, checks=${JSON.stringify(status?.checks ?? [])}`,
+        );
+        return status?.phase === 'Succeeded' || status?.phase === 'Failed';
+      },
+      { timeoutMs: 120_000, intervalMs: 3_000, label: 'mission completion' },
+    );
+
+    const mission = await getCustomResource('missions', 'e2e-test-mission');
+    expect(mission).not.toBeNull();
+    const status = (mission as Record<string, unknown>).status as {
+      phase: string;
+      attempt: number;
+      checks?: { name: string; status: string }[];
+    };
+    expect(status.phase).toBe('Succeeded');
+    expect(status.checks).toBeDefined();
+    expect(status.checks!.every((c) => c.status === 'Passed')).toBe(true);
+    console.log(`[test] PASSED: Mission Succeeded on attempt ${status.attempt}`);
+  });
+
   it('cleans up Mission CRD on delete', async () => {
     console.log('[test] === Mission cleanup on delete ===');
     await applyCell(MISSION_CELL);

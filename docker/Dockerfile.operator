@@ -21,5 +21,6 @@ COPY --from=build /app/packages/operator/dist packages/operator/dist
 COPY --from=build /app/packages/operator/package.json packages/operator/package.json
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
+RUN mkdir -p /workspace
 USER node
 CMD ["node", "packages/operator/dist/main.js"]
