@@ -162,6 +162,19 @@ describe('buildCellPod', () => {
     expect(env?.value).toBe('http://ollama:11434');
   });
 
+  it('sets OTEL_EXPORTER_OTLP_ENDPOINT env var', () => {
+    const cell = makeCell();
+    const pod = buildCellPod(cell);
+    const container = pod.spec?.containers?.[0];
+    const env = container?.env?.find(
+      (e) => e.name === 'OTEL_EXPORTER_OTLP_ENDPOINT',
+    );
+
+    expect(env?.value).toBe(
+      'http://otel-collector-opentelemetry-collector.kais-system:4317',
+    );
+  });
+
   it('includes secret reference for LLM credentials', () => {
     const cell = makeCell();
     const pod = buildCellPod(cell);
