@@ -365,5 +365,23 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
     reply.status(res.status).send(await res.json());
   });
 
+  app.post('/api/v1/knowledge/graphs/register', async (req, reply) => {
+    const res = await fetch(`${KNOWLEDGE_URL}/graphs/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    reply.status(res.status).send(await res.json());
+  });
+
+  app.post('/api/v1/knowledge/graphs/unregister', async (req, reply) => {
+    const res = await fetch(`${KNOWLEDGE_URL}/graphs/unregister`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    });
+    reply.status(res.status).send(await res.json());
+  });
+
   return app;
 }

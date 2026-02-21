@@ -489,7 +489,7 @@ export function createProgram(): Command {
 
   // ----- Knowledge commands -----
 
-  program
+  const knowledge = program
     .command('knowledge')
     .description('Manage the knowledge graph')
     .addCommand(
@@ -558,6 +558,29 @@ export function createProgram(): Command {
           const data = await res.json() as { factId: string };
           console.log(`Fact added: ${data.factId}`);
         }),
+    );
+
+  // ----- KnowledgeGraph commands -----
+
+  knowledge
+    .addCommand(
+      new Command('graphs')
+        .description('Manage KnowledgeGraph resources')
+        .addCommand(
+          new Command('list')
+            .action(() => {
+              const result = execFileSync('kubectl', ['get', 'knowledgegraphs', '-o', 'wide'], { encoding: 'utf-8' });
+              console.log(result);
+            }),
+        )
+        .addCommand(
+          new Command('describe')
+            .argument('<name>', 'KnowledgeGraph name')
+            .action((name: string) => {
+              const result = execFileSync('kubectl', ['describe', 'knowledgegraph', name], { encoding: 'utf-8' });
+              console.log(result);
+            }),
+        ),
     );
 
   // ----- Blueprint commands -----
