@@ -1,0 +1,67 @@
+# Phase 8.4 — RBAC role definitions
+# Apply with: kais apply -f rbac-roles.yaml
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: admin
+  # No namespace — cluster-wide role
+spec:
+  rules:
+    - resources: [cells, formations, missions, experiments, evolutions, blueprints, knowledge, spawn-requests, budgets, dashboard, roles, instincts, rituals]
+      verbs: [get, list, create, update, delete, approve, reject, use, allocate, view, add, invalidate, promote]
+      maxAllocation: 1000.00
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: project-lead
+  namespace: project-x
+spec:
+  rules:
+    - resources: [cells, formations, missions]
+      verbs: [get, list, create, update, delete]
+    - resources: [experiments, evolutions]
+      verbs: [get, list, create]
+    - resources: [blueprints]
+      verbs: [get, list, use]
+    - resources: [knowledge]
+      verbs: [get, list, add, invalidate]
+    - resources: [spawn-requests]
+      verbs: [get, list, approve, reject]
+    - resources: [budgets]
+      verbs: [get, allocate]
+      maxAllocation: 100.00
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: researcher
+  namespace: experiments
+spec:
+  rules:
+    - resources: [experiments, evolutions]
+      verbs: [get, list, create, update, delete]
+    - resources: [blueprints]
+      verbs: [get, list, use, create]
+    - resources: [cells, formations]
+      verbs: [get, list]
+    - resources: [budgets]
+      verbs: [get, allocate]
+      maxAllocation: 50.00
+
+---
+apiVersion: kais.io/v1
+kind: Role
+metadata:
+  name: observer
+  # No namespace — cluster-wide read-only
+spec:
+  rules:
+    - resources: [cells, formations, missions, experiments, evolutions, blueprints, knowledge]
+      verbs: [get, list]
+    - resources: [dashboard]
+      verbs: [view]
