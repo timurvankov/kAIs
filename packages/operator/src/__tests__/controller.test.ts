@@ -89,6 +89,19 @@ function createMockClient(): KubeClient & {
     ): Promise<void> {
       emittedEvents.push({ cell, eventType, reason, message });
     },
+
+    // Stub methods required by KubeClient interface but not used by CellController
+    async createCell(cell: CellResource): Promise<CellResource> { return cell; },
+    async updateCell(): Promise<void> {},
+    async deleteCell(): Promise<void> {},
+    async listCells(): Promise<CellResource[]> { return []; },
+    async updateFormationStatus(): Promise<void> {},
+    async createOrUpdateConfigMap(): Promise<void> {},
+    async createPVC(): Promise<void> {},
+    async getPVC(): Promise<k8s.V1PersistentVolumeClaim | null> { return null; },
+    async emitFormationEvent(): Promise<void> {},
+    async updateMissionStatus(): Promise<void> {},
+    async emitMissionEvent(): Promise<void> {},
   };
 }
 

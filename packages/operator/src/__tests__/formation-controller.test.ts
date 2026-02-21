@@ -190,6 +190,10 @@ function createMockClient(): KubeClient & {
     ): Promise<void> {
       formationEvents.push({ formation, eventType, reason, message });
     },
+
+    // Stub methods required by KubeClient interface but not used by FormationController
+    async updateMissionStatus(): Promise<void> {},
+    async emitMissionEvent(): Promise<void> {},
   };
 }
 

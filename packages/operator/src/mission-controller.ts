@@ -186,20 +186,10 @@ export class MissionController {
         await this.reconcileRunning(mission);
         break;
       case 'Succeeded':
-        await this.client.emitMissionEvent(
-          mission,
-          'MissionCompleted',
-          'MissionCompleted',
-          `Mission ${mission.metadata.name} completed successfully`,
-        );
+        // Terminal phase — transition events already emitted during Running→Succeeded
         break;
       case 'Failed':
-        await this.client.emitMissionEvent(
-          mission,
-          'MissionFailed',
-          'MissionFailed',
-          `Mission ${mission.metadata.name} failed: ${mission.status?.message ?? 'unknown reason'}`,
-        );
+        // Terminal phase — transition events already emitted during Running→Failed
         break;
     }
   }

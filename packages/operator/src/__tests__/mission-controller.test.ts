@@ -729,7 +729,7 @@ describe('MissionController.reconcileMission', () => {
   // --- Terminal phases ---
 
   describe('Terminal phases', () => {
-    it('emits MissionCompleted for Succeeded phase (idempotent)', async () => {
+    it('does not emit events for already-Succeeded missions', async () => {
       const mission = makeMission({}, {}, {
         phase: 'Succeeded',
         attempt: 1,
@@ -743,12 +743,11 @@ describe('MissionController.reconcileMission', () => {
       // Should not update status
       expect(client.missionStatusUpdates).toHaveLength(0);
 
-      // Should emit MissionCompleted
-      const completedEvent = client.missionEvents.find((e) => e.eventType === 'MissionCompleted');
-      expect(completedEvent).toBeDefined();
+      // Should NOT emit any events (transition events were already emitted)
+      expect(client.missionEvents).toHaveLength(0);
     });
 
-    it('emits MissionFailed for Failed phase (idempotent)', async () => {
+    it('does not emit events for already-Failed missions', async () => {
       const mission = makeMission({}, {}, {
         phase: 'Failed',
         attempt: 3,
@@ -763,9 +762,8 @@ describe('MissionController.reconcileMission', () => {
       // Should not update status
       expect(client.missionStatusUpdates).toHaveLength(0);
 
-      // Should emit MissionFailed
-      const failEvent = client.missionEvents.find((e) => e.eventType === 'MissionFailed');
-      expect(failEvent).toBeDefined();
+      // Should NOT emit any events (transition events were already emitted)
+      expect(client.missionEvents).toHaveLength(0);
     });
   });
 

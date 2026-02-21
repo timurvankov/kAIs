@@ -106,9 +106,14 @@ async function runFileExistsCheck(
     };
   }
 
+  const resolvedWorkspace = path.resolve(workspacePath);
   const missing: string[] = [];
   for (const p of paths) {
     const fullPath = path.resolve(workspacePath, p);
+    if (!fullPath.startsWith(resolvedWorkspace + '/') && fullPath !== resolvedWorkspace) {
+      missing.push(p + ' (path traversal blocked)');
+      continue;
+    }
     const fileExists = await fs.exists(fullPath);
     if (!fileExists) {
       missing.push(p);

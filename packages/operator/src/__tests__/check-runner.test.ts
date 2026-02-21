@@ -108,6 +108,65 @@ describe('runCheck - fileExists', () => {
 
     expect(result.status).toBe('Error');
   });
+
+  it('blocks path traversal with ../', async () => {
+    const check: CompletionCheck = {
+      name: 'traversal-check',
+      type: 'fileExists',
+      paths: ['../etc/passwd'],
+    };
+    const fs = createMockFs(new Set(['/etc/passwd']));
+    const executor = createMockExecutor();
+
+    const result = await runCheck(check, '/workspace', executor, fs);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('path traversal blocked');
+  });
+
+  it('blocks absolute path traversal', async () => {
+    const check: CompletionCheck = {
+      name: 'absolute-traversal',
+      type: 'fileExists',
+      paths: ['/etc/shadow'],
+    };
+    const fs = createMockFs(new Set(['/etc/shadow']));
+    const executor = createMockExecutor();
+
+    const result = await runCheck(check, '/workspace', executor, fs);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('path traversal blocked');
+  });
+
+  it('blocks nested path traversal', async () => {
+    const check: CompletionCheck = {
+      name: 'nested-traversal',
+      type: 'fileExists',
+      paths: ['subdir/../../etc/passwd'],
+    };
+    const fs = createMockFs(new Set(['/etc/passwd']));
+    const executor = createMockExecutor();
+
+    const result = await runCheck(check, '/workspace', executor, fs);
+
+    expect(result.status).toBe('Failed');
+    expect(result.output).toContain('path traversal blocked');
+  });
+
+  it('allows valid paths within workspace', async () => {
+    const check: CompletionCheck = {
+      name: 'valid-paths',
+      type: 'fileExists',
+      paths: ['src/index.ts', 'subdir/../README.md'],
+    };
+    const fs = createMockFs(new Set(['/workspace/src/index.ts', '/workspace/README.md']));
+    const executor = createMockExecutor();
+
+    const result = await runCheck(check, '/workspace', executor, fs);
+
+    expect(result.status).toBe('Passed');
+  });
 });
 
 // --- command checks ---
