@@ -643,4 +643,248 @@ describe('kais CLI', () => {
       consoleSpy.mockRestore();
     });
   });
+
+  // ----- Trace command -----
+
+  describe('trace command', () => {
+    it('is registered and accepts a mission argument', async () => {
+      const { execSync } = await import('node:child_process');
+      const mockedExec = vi.mocked(execSync);
+      // execSync for xdg-open will throw (no browser in test), which is expected
+      mockedExec.mockImplementation(() => { throw new Error('no browser'); });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram(['trace', 'my-mission']);
+
+      // First log is the "Opening Jaeger trace:" message
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Opening Jaeger trace:'),
+      );
+
+      // URL should contain default Jaeger host and mission name
+      const firstCallArg = consoleSpy.mock.calls[0]![0] as string;
+      expect(firstCallArg).toContain('http://localhost:16686');
+      expect(firstCallArg).toContain('my-mission');
+
+      // Fallback message after browser open fails
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Open this URL in your browser:'),
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('uses KAIS_JAEGER_URL env var when set', async () => {
+      const { execSync } = await import('node:child_process');
+      const mockedExec = vi.mocked(execSync);
+      mockedExec.mockImplementation(() => { throw new Error('no browser'); });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const original = process.env['KAIS_JAEGER_URL'];
+      process.env['KAIS_JAEGER_URL'] = 'http://jaeger.prod:16686';
+      try {
+        await runProgram(['trace', 'deploy-v2']);
+
+        const firstCallArg = consoleSpy.mock.calls[0]![0] as string;
+        expect(firstCallArg).toContain('http://jaeger.prod:16686');
+        expect(firstCallArg).toContain('deploy-v2');
+      } finally {
+        if (original === undefined) {
+          delete process.env['KAIS_JAEGER_URL'];
+        } else {
+          process.env['KAIS_JAEGER_URL'] = original;
+        }
+      }
+
+      consoleSpy.mockRestore();
+    });
+
+    it('constructs correct Jaeger URL with encoded mission name', async () => {
+      const { execSync } = await import('node:child_process');
+      const mockedExec = vi.mocked(execSync);
+      mockedExec.mockImplementation(() => { throw new Error('no browser'); });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram(['trace', 'my mission']);
+
+      const firstCallArg = consoleSpy.mock.calls[0]![0] as string;
+      expect(firstCallArg).toContain('service=kais-cell');
+      expect(firstCallArg).toContain('my%20mission');
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  // ----- Metrics command -----
+
+  describe('metrics command', () => {
+    it('fetches and displays platform metrics', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          activeCells: 5,
+          totalCostToday: 12.3456,
+          totalTokensToday: 500000,
+          llmCallsToday: 150,
+        }),
+      });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram(['metrics', '--api-url', 'http://test:3000']);
+
+      expect(mockFetch).toHaveBeenCalledWith('http://test:3000/api/v1/metrics');
+
+      expect(consoleSpy).toHaveBeenCalledWith('Active Cells:    5');
+      expect(consoleSpy).toHaveBeenCalledWith('Cost Today:      $12.3456');
+      expect(consoleSpy).toHaveBeenCalledWith('Tokens Today:    500000');
+      expect(consoleSpy).toHaveBeenCalledWith('LLM Calls Today: 150');
+
+      consoleSpy.mockRestore();
+    });
+
+    it('uses default API URL when not specified', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          activeCells: 0,
+          totalCostToday: 0,
+          totalTokensToday: 0,
+          llmCallsToday: 0,
+        }),
+      });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram(['metrics']);
+
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:3000/api/v1/metrics');
+
+      consoleSpy.mockRestore();
+    });
+
+    it('handles API errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        text: async () => 'Service Unavailable',
+      });
+
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await runProgram(['metrics', '--api-url', 'http://test:3000']);
+
+      expect(consoleSpy).toHaveBeenCalledWith('Error: 503 Service Unavailable');
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  // ----- Dashboard command -----
+
+  describe('dashboard command', () => {
+    it('is registered and prints Grafana URL', async () => {
+      const { execSync } = await import('node:child_process');
+      const mockedExec = vi.mocked(execSync);
+      mockedExec.mockImplementation(() => { throw new Error('no browser'); });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram(['dashboard']);
+
+      expect(consoleSpy).toHaveBeenCalledWith('Opening Grafana: http://localhost:3001');
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Open this URL in your browser:'),
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it('uses KAIS_GRAFANA_URL env var when set', async () => {
+      const { execSync } = await import('node:child_process');
+      const mockedExec = vi.mocked(execSync);
+      mockedExec.mockImplementation(() => { throw new Error('no browser'); });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const original = process.env['KAIS_GRAFANA_URL'];
+      process.env['KAIS_GRAFANA_URL'] = 'http://grafana.prod:3001';
+      try {
+        await runProgram(['dashboard']);
+
+        expect(consoleSpy).toHaveBeenCalledWith('Opening Grafana: http://grafana.prod:3001');
+      } finally {
+        if (original === undefined) {
+          delete process.env['KAIS_GRAFANA_URL'];
+        } else {
+          process.env['KAIS_GRAFANA_URL'] = original;
+        }
+      }
+
+      consoleSpy.mockRestore();
+    });
+  });
+
+  // ----- logs cell --trace-id option -----
+
+  describe('logs cell --trace-id option', () => {
+    it('includes trace_id in query params when provided', async () => {
+      const logData = {
+        logs: [
+          {
+            created_at: '2025-01-15T10:30:00Z',
+            event_type: 'message_received',
+            payload: { content: 'hello' },
+          },
+        ],
+        total: 1,
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => logData,
+      });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram([
+        'logs', 'cell', 'researcher',
+        '--api-url', 'http://test:3000',
+        '--trace-id', 'abc-123-def',
+      ]);
+
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
+      expect(calledUrl).toContain('trace_id=abc-123-def');
+      expect(calledUrl).toContain('http://test:3000/api/v1/cells/researcher/logs');
+
+      consoleSpy.mockRestore();
+    });
+
+    it('does not include trace_id when not provided', async () => {
+      const logData = {
+        logs: [],
+        total: 0,
+      };
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => logData,
+      });
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await runProgram([
+        'logs', 'cell', 'researcher',
+        '--api-url', 'http://test:3000',
+      ]);
+
+      const calledUrl = mockFetch.mock.calls[0]![0] as string;
+      expect(calledUrl).not.toContain('trace_id');
+
+      consoleSpy.mockRestore();
+    });
+  });
 });

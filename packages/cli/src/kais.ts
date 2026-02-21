@@ -83,13 +83,17 @@ export function createProgram(): Command {
     .description('Fetch event logs for a Cell')
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .option('--limit <n>', 'Maximum number of log entries', '50')
+    .option('--trace-id <id>', 'Filter logs by trace ID')
     .option('--api-url <url>', 'API server URL')
-    .action(async (name: string, opts: { namespace: string; limit: string; apiUrl?: string }) => {
+    .action(async (name: string, opts: { namespace: string; limit: string; traceId?: string; apiUrl?: string }) => {
       const apiUrl = getApiUrl(opts);
       const params = new URLSearchParams({
         namespace: opts.namespace,
         limit: opts.limit,
       });
+      if (opts.traceId) {
+        params.set('trace_id', opts.traceId);
+      }
       const res = await fetch(
         `${apiUrl}/api/v1/cells/${encodeURIComponent(name)}/logs?${params.toString()}`,
       );
@@ -425,6 +429,62 @@ export function createProgram(): Command {
 
       const output = renderTopology(formation.spec.topology, formation.spec.cells);
       console.log(output);
+    });
+
+  // ----- Observability commands -----
+
+  program
+    .command('trace <mission>')
+    .description('Open Jaeger UI for a mission trace')
+    .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
+    .action((mission: string, _opts: { namespace: string }) => {
+      const jaegerUrl = process.env['KAIS_JAEGER_URL'] ?? 'http://localhost:16686';
+      const url = `${jaegerUrl}/search?service=kais-cell&tags=%7B%22mission%22%3A%22${encodeURIComponent(mission)}%22%7D`;
+      console.log(`Opening Jaeger trace: ${url}`);
+      try {
+        const openCmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+        execSync(`${openCmd} '${url}'`, { stdio: 'ignore' });
+      } catch {
+        console.log(`Open this URL in your browser: ${url}`);
+      }
+    });
+
+  program
+    .command('metrics')
+    .description('Show platform metrics summary')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (opts: { apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+      const res = await fetch(`${apiUrl}/api/v1/metrics`);
+      if (!res.ok) {
+        console.error(`Error: ${res.status} ${await res.text()}`);
+        process.exitCode = 1;
+        return;
+      }
+      const data = await res.json() as {
+        activeCells: number;
+        totalCostToday: number;
+        totalTokensToday: number;
+        llmCallsToday: number;
+      };
+      console.log(`Active Cells:    ${data.activeCells}`);
+      console.log(`Cost Today:      $${data.totalCostToday.toFixed(4)}`);
+      console.log(`Tokens Today:    ${data.totalTokensToday}`);
+      console.log(`LLM Calls Today: ${data.llmCallsToday}`);
+    });
+
+  program
+    .command('dashboard')
+    .description('Open Grafana dashboard in browser')
+    .action(() => {
+      const grafanaUrl = process.env['KAIS_GRAFANA_URL'] ?? 'http://localhost:3001';
+      console.log(`Opening Grafana: ${grafanaUrl}`);
+      try {
+        const openCmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
+        execSync(`${openCmd} '${grafanaUrl}'`, { stdio: 'ignore' });
+      } catch {
+        console.log(`Open this URL in your browser: ${grafanaUrl}`);
+      }
     });
 
   return program;
