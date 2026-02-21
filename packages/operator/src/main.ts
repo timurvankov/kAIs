@@ -530,7 +530,10 @@ async function createNatsClient(): Promise<NatsClient> {
         while (Date.now() < deadline) {
           const remaining = deadline - Date.now();
           const msg = await consumer.next({ expires: Math.min(remaining, 2000) });
-          if (!msg) break; // no more messages
+          if (!msg) {
+            if (messages.length > 0) break; // got messages, no more available
+            continue; // no messages yet, keep waiting until deadline
+          }
           msg.ack();
           messages.push(new TextDecoder().decode(msg.data));
         }
