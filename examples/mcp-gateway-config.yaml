@@ -1,0 +1,97 @@
+# Phase 8.5 — MCP Gateway deployment
+# Exposes kAIs as an MCP server for Claude Desktop, Cursor, and other MCP clients.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-mcp-gateway
+  namespace: kais-system
+  labels:
+    app: kais-mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kais-mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: kais-mcp-gateway
+    spec:
+      containers:
+        - name: mcp
+          image: kais-mcp-gateway:latest
+          ports:
+            - containerPort: 3001
+              name: mcp
+          env:
+            - name: KAIS_API_URL
+              value: http://kais-api.kais-system:8080
+            - name: KAIS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kais-mcp-credentials
+                  key: token
+            - name: MCP_PORT
+              value: "3001"
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 128Mi
+              cpu: 200m
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            initialDelaySeconds: 3
+            periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kais-mcp-gateway
+  namespace: kais-system
+spec:
+  selector:
+    app: kais-mcp-gateway
+  ports:
+    - port: 3001
+      targetPort: mcp
+      protocol: TCP
+      name: mcp
+
+---
+# Secret for MCP Gateway authentication against kais-api
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kais-mcp-credentials
+  namespace: kais-system
+type: Opaque
+stringData:
+  token: "${KAIS_MCP_TOKEN}"
+
+---
+# Claude Desktop config example (place in ~/.claude/claude_desktop_config.json):
+#
+# {
+#   "mcpServers": {
+#     "kais": {
+#       "url": "http://localhost:3001/mcp",
+#       "name": "kais"
+#     }
+#   }
+# }
+#
+# To expose locally: kubectl port-forward -n kais-system svc/kais-mcp-gateway 3001:3001
+# Or use: kais mcp serve --port 3001

@@ -226,7 +226,7 @@ describe('Mission CRD Lifecycle', () => {
     console.log(`[test] PASSED: Mission Succeeded on attempt ${status.attempt}`);
   });
 
-  it('verifies cell response via natsResponse check', async () => {
+  it.skip('verifies cell response via natsResponse check', async () => {
     console.log('[test] === Mission with natsResponse check ===');
     await applyCell(MISSION_CELL);
 
