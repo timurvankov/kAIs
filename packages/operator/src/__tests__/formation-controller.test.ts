@@ -1,6 +1,6 @@
 import type * as k8s from '@kubernetes/client-node';
 import type { CellSpec, CellStatus, FormationStatus } from '@kais/core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FormationController } from '../formation-controller.js';
 import type {
@@ -196,6 +196,8 @@ function createMockClient(): KubeClient & {
     async emitMissionEvent(): Promise<void> {},
     async updateExperimentStatus(): Promise<void> {},
     async emitExperimentEvent(): Promise<void> {},
+    updateBlueprintStatus: vi.fn(),
+    emitBlueprintEvent: vi.fn(),
   };
 }
 

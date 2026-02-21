@@ -1,6 +1,6 @@
 import type { CellSpec, CellStatus, FormationStatus, MissionStatus } from '@kais/core';
 import type * as k8s from '@kubernetes/client-node';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MissionController } from '../mission-controller.js';
 import type {
@@ -92,6 +92,8 @@ function createMockClient(): KubeClient & {
     // Stub methods required by KubeClient interface but not used by MissionController
     async updateExperimentStatus(): Promise<void> {},
     async emitExperimentEvent(): Promise<void> {},
+    updateBlueprintStatus: vi.fn(),
+    emitBlueprintEvent: vi.fn(),
   };
 }
 

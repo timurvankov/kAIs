@@ -104,6 +104,8 @@ function createMockClient(): KubeClient & {
     async emitMissionEvent(): Promise<void> {},
     async updateExperimentStatus(): Promise<void> {},
     async emitExperimentEvent(): Promise<void> {},
+    updateBlueprintStatus: vi.fn(),
+    emitBlueprintEvent: vi.fn(),
   };
 }
 
