@@ -146,9 +146,6 @@ spec:
         - name: Attempt
           type: integer
           jsonPath: .status.attempt
-        - name: Checks
-          type: integer
-          jsonPath: .spec.completion.checks
         - name: Cost
           type: string
           jsonPath: .status.cost

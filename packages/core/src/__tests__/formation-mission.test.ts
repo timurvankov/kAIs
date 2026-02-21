@@ -55,6 +55,7 @@ const validEntrypoint = {
 };
 
 const validMissionSpec = {
+  formationRef: 'my-formation',
   objective: 'Implement user authentication',
   completion: validCompletion,
   entrypoint: validEntrypoint,
@@ -558,30 +559,40 @@ describe('MissionEntrypointSchema', () => {
 // --- MissionSpec ---
 
 describe('MissionSpecSchema', () => {
-  it('accepts a valid minimal mission spec', () => {
+  it('accepts a valid minimal mission spec with formationRef', () => {
     const result = MissionSpecSchema.parse(validMissionSpec);
     expect(result.objective).toBe('Implement user authentication');
     expect(result.completion.checks).toHaveLength(1);
     expect(result.entrypoint.cell).toBe('researcher');
-    expect(result.formationRef).toBeUndefined();
+    expect(result.formationRef).toBe('my-formation');
     expect(result.cellRef).toBeUndefined();
     expect(result.budget).toBeUndefined();
   });
 
-  it('accepts mission spec with formationRef', () => {
+  it('accepts mission spec with only cellRef', () => {
+    const { formationRef: _, ...withoutFormationRef } = validMissionSpec;
     const result = MissionSpecSchema.parse({
-      ...validMissionSpec,
-      formationRef: 'my-formation',
+      ...withoutFormationRef,
+      cellRef: 'my-cell',
     });
-    expect(result.formationRef).toBe('my-formation');
+    expect(result.cellRef).toBe('my-cell');
+    expect(result.formationRef).toBeUndefined();
   });
 
-  it('accepts mission spec with cellRef', () => {
+  it('accepts mission spec with both formationRef and cellRef', () => {
     const result = MissionSpecSchema.parse({
       ...validMissionSpec,
       cellRef: 'my-cell',
     });
+    expect(result.formationRef).toBe('my-formation');
     expect(result.cellRef).toBe('my-cell');
+  });
+
+  it('rejects mission spec with neither formationRef nor cellRef', () => {
+    const { formationRef: _, ...withoutRef } = validMissionSpec;
+    expect(() => MissionSpecSchema.parse(withoutRef)).toThrow(
+      'At least one of formationRef or cellRef must be provided',
+    );
   });
 
   it('accepts mission spec with budget', () => {

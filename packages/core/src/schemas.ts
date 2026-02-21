@@ -234,6 +234,8 @@ export const MissionSpecSchema = z.object({
   completion: MissionCompletionSchema,
   entrypoint: MissionEntrypointSchema,
   budget: MissionBudgetSchema.optional(),
+}).refine(data => data.formationRef !== undefined || data.cellRef !== undefined, {
+  message: 'At least one of formationRef or cellRef must be provided',
 });
 
 // --- MissionStatus ---
