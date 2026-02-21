@@ -1,6 +1,9 @@
 // Controller
 export { CellController } from './controller.js';
 
+// Health server for K8s probes
+export { startHealthServer } from './health.js';
+
 // Pod template builder
 export { buildCellPod } from './pod-builder.js';
 

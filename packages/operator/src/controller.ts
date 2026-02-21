@@ -142,7 +142,7 @@ export class CellController {
       await this.client.updateCellStatus(
         cell.metadata.name,
         cell.metadata.namespace,
-        { phase: 'Running', podName },
+        { phase: 'Pending', podName },
       );
       await this.client.emitEvent(
         cell,

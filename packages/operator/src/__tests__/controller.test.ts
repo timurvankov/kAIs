@@ -149,9 +149,9 @@ describe('CellController.reconcileCell', () => {
     expect(createdPod.metadata?.name).toBe('cell-researcher');
     expect(createdPod.metadata?.namespace).toBe('default');
 
-    // Status should be updated to Running
+    // Status should be updated to Pending (Pod is not yet running)
     expect(client.statusUpdates).toHaveLength(1);
-    expect(client.statusUpdates[0]!.status.phase).toBe('Running');
+    expect(client.statusUpdates[0]!.status.phase).toBe('Pending');
     expect(client.statusUpdates[0]!.status.podName).toBe('cell-researcher');
 
     // Event should be emitted

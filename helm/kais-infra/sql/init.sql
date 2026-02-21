@@ -7,6 +7,6 @@ CREATE TABLE IF NOT EXISTS cell_events (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_cell_events_cell ON cell_events(namespace, cell_name);
-CREATE INDEX idx_cell_events_type ON cell_events(event_type);
-CREATE INDEX idx_cell_events_created ON cell_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_cell_events_cell ON cell_events(namespace, cell_name);
+CREATE INDEX IF NOT EXISTS idx_cell_events_type ON cell_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_cell_events_created ON cell_events(created_at);
