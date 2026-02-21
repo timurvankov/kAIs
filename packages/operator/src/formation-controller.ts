@@ -7,6 +7,11 @@ import { deepEqual } from './spec-changed.js';
 import { buildWorkspacePVC } from './workspace.js';
 import type { CellResource, FormationResource, KubeClient } from './types.js';
 
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { code?: number; statusCode?: number; response?: { statusCode?: number } };
+  return e.code ?? e.statusCode ?? e.response?.statusCode;
+}
+
 const RECONCILE_RETRY_DELAY_MS = 5_000;
 const MAX_RECONCILE_RETRIES = 3;
 
@@ -188,9 +193,17 @@ export class FormationController {
       const existingCell = await this.client.getCell(cellName, namespace);
 
       if (!existingCell) {
-        // Create the Cell
+        // Create the Cell (handle race where another reconciler created it first)
         const cell = this.buildCellResource(cellName, namespace, spec, formation);
-        await this.client.createCell(cell);
+        try {
+          await this.client.createCell(cell);
+        } catch (err: unknown) {
+          if (httpStatus(err) === 409) {
+            console.log(`[FormationController] cell ${cellName} already exists, skipping create`);
+            continue;
+          }
+          throw err;
+        }
         await this.client.emitFormationEvent(
           formation,
           'CellCreated',

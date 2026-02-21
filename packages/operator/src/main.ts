@@ -5,7 +5,7 @@
  * and starts watching CRDs.
  */
 import * as k8s from '@kubernetes/client-node';
-import { connect as natsConnect } from 'nats';
+import { connect as natsConnect, RetentionPolicy, StorageType } from 'nats';
 import { createEnvelope } from '@kais/core';
 
 import { CellController } from './controller.js';
@@ -399,6 +399,26 @@ async function createNatsClient(): Promise<NatsClient> {
   const nc = await natsConnect({ servers: NATS_URL });
   console.log(`[kais-operator] Connected to NATS at ${NATS_URL}`);
 
+  // Set up JetStream stream for cell outbox messages so natsResponse checks
+  // can read messages published before the subscription was created.
+  const jsm = await nc.jetstreamManager();
+  try {
+    await jsm.streams.info('CELL_OUTBOX');
+    console.log('[kais-operator] JetStream stream CELL_OUTBOX already exists');
+  } catch {
+    await jsm.streams.add({
+      name: 'CELL_OUTBOX',
+      subjects: ['cell.*.*.outbox'],
+      retention: RetentionPolicy.Limits,
+      storage: StorageType.Memory,
+      max_msgs_per_subject: 64,
+      max_age: 600_000_000_000, // 10 minutes in nanoseconds
+    });
+    console.log('[kais-operator] Created JetStream stream CELL_OUTBOX');
+  }
+
+  const js = nc.jetstream();
+
   return {
     async sendMessageToCell(cellName, namespace, message) {
       const subject = `cell.${namespace}.${cellName}.inbox`;
@@ -414,13 +434,20 @@ async function createNatsClient(): Promise<NatsClient> {
     },
 
     async waitForMessage(subject, timeoutMs) {
-      const sub = nc.subscribe(subject, { max: 1, timeout: timeoutMs });
+      // Use JetStream ordered consumer to read retained messages (including
+      // those published before this call). DeliverPolicy.All ensures we get
+      // the first message on the subject even if it was published earlier.
       try {
-        for await (const msg of sub) {
+        const consumer = await js.consumers.get('CELL_OUTBOX', {
+          filterSubjects: [subject],
+        });
+        const msg = await consumer.next({ expires: timeoutMs });
+        if (msg) {
+          msg.ack();
           return new TextDecoder().decode(msg.data);
         }
       } catch {
-        // Timeout or other error
+        // Timeout or stream error
       }
       return null;
     },
