@@ -88,6 +88,7 @@ const NATS_MISSION = {
           type: 'natsResponse',
           subject: 'cell.default.e2e-mission-cell.outbox',
           timeoutSeconds: 60,
+          successPattern: 'hello',
         },
       ],
       maxAttempts: 2,

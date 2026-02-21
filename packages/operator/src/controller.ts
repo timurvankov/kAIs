@@ -176,6 +176,11 @@ export class CellController {
         await this.reconcileCell(cell);
         return;
       } catch (err) {
+        // 404 means the cell was deleted — stop retrying
+        if (httpStatus(err) === 404) {
+          console.log(`[CellController] cell ${cellId} not found, skipping reconcile`);
+          return;
+        }
         console.error(
           `[CellController] reconcile attempt ${attempt + 1} failed for ${cellId}:`,
           err,
