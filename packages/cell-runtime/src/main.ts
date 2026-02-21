@@ -183,6 +183,27 @@ async function main() {
     );
   }
 
+  // Knowledge tools (only when KNOWLEDGE_SERVICE_URL is set)
+  const KNOWLEDGE_URL = process.env['KNOWLEDGE_SERVICE_URL'];
+  if (KNOWLEDGE_URL) {
+    const { createRecallTool, createRememberTool, createCorrectTool } = await import('./tools/recall.js');
+    const knowledgeConfig = {
+      knowledgeUrl: KNOWLEDGE_URL,
+      cellName: CELL_NAME,
+      namespace: CELL_NAMESPACE,
+    };
+
+    if (allowedTools.some(t => t.name === 'recall') || allowedTools.length === 0) {
+      tools.push(createRecallTool(knowledgeConfig));
+    }
+    if (allowedTools.some(t => t.name === 'remember') || allowedTools.length === 0) {
+      tools.push(createRememberTool(knowledgeConfig));
+    }
+    if (allowedTools.some(t => t.name === 'correct') || allowedTools.length === 0) {
+      tools.push(createCorrectTool({ knowledgeUrl: KNOWLEDGE_URL }));
+    }
+  }
+
   // TODO: Wire spawn_cell tool — requires K8s client (e.g., @kubernetes/client-node)
   // which is not yet available in the cell runtime. Defer until K8s client integration.
 
