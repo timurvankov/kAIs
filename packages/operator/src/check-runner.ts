@@ -1,7 +1,11 @@
 import type { CompletionCheck } from '@kais/core';
+import { getTracer } from '@kais/core';
+import { SpanStatusCode } from '@opentelemetry/api';
 import * as path from 'node:path';
 
 import type { CommandExecutor, FileSystem, NatsClient } from './types.js';
+
+const tracer = getTracer('kais-operator');
 
 /**
  * Result of running a single completion check.
@@ -67,29 +71,48 @@ export async function runCheck(
   fs: FileSystem,
   nats?: NatsClient,
 ): Promise<CheckResult> {
+  const span = tracer.startSpan('operator.run_checks', {
+    attributes: {
+      'resource.name': check.name,
+    },
+  });
   try {
-    switch (check.type) {
-      case 'fileExists':
-        return await runFileExistsCheck(check, workspacePath, fs);
-      case 'command':
-        return await runCommandCheck(check, workspacePath, executor);
-      case 'coverage':
-        return await runCoverageCheck(check, workspacePath, executor);
-      case 'natsResponse':
-        return await runNatsResponseCheck(check, nats);
-      default:
-        return {
-          name: check.name,
-          status: 'Error',
-          output: `Unknown check type: "${check.type as string}"`,
-        };
+    let result: CheckResult;
+    try {
+      switch (check.type) {
+        case 'fileExists':
+          result = await runFileExistsCheck(check, workspacePath, fs);
+          break;
+        case 'command':
+          result = await runCommandCheck(check, workspacePath, executor);
+          break;
+        case 'coverage':
+          result = await runCoverageCheck(check, workspacePath, executor);
+          break;
+        case 'natsResponse':
+          result = await runNatsResponseCheck(check, nats);
+          break;
+        default:
+          result = {
+            name: check.name,
+            status: 'Error',
+            output: `Unknown check type: "${check.type as string}"`,
+          };
+      }
+    } catch (err) {
+      result = {
+        name: check.name,
+        status: 'Error',
+        output: `Check threw an exception: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
+    span.setStatus({ code: SpanStatusCode.OK });
+    return result;
   } catch (err) {
-    return {
-      name: check.name,
-      status: 'Error',
-      output: `Check threw an exception: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+    throw err;
+  } finally {
+    span.end();
   }
 }
 

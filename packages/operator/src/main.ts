@@ -6,7 +6,7 @@
  */
 import * as k8s from '@kubernetes/client-node';
 import { connect as natsConnect, RetentionPolicy, StorageType } from 'nats';
-import { createEnvelope } from '@kais/core';
+import { createEnvelope, initTelemetry, shutdownTelemetry } from '@kais/core';
 
 import { CellController } from './controller.js';
 import { FormationController } from './formation-controller.js';
@@ -503,6 +503,7 @@ function createFileSystem(): FileSystem {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  initTelemetry({ serviceName: 'kais-operator' });
   console.log('[kais-operator] Starting...');
 
   const kc = new k8s.KubeConfig();
@@ -539,7 +540,7 @@ async function main(): Promise<void> {
     cellController.stop();
     formationController.stop();
     missionController.stop();
-    process.exit(0);
+    void shutdownTelemetry().finally(() => process.exit(0));
   });
 
   process.on('SIGINT', () => {
@@ -547,7 +548,7 @@ async function main(): Promise<void> {
     cellController.stop();
     formationController.stop();
     missionController.stop();
-    process.exit(0);
+    void shutdownTelemetry().finally(() => process.exit(0));
   });
 }
 

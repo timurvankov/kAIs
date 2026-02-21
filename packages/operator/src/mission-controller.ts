@@ -1,6 +1,8 @@
 import type * as k8s from '@kubernetes/client-node';
 import * as k8sLib from '@kubernetes/client-node';
 import type { MissionStatus } from '@kais/core';
+import { getTracer } from '@kais/core';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 import { runCheck } from './check-runner.js';
 import { parseTimeout } from './timeout.js';
@@ -11,6 +13,8 @@ import type {
   MissionResource,
   NatsClient,
 } from './types.js';
+
+const tracer = getTracer('kais-operator');
 
 const RECONCILE_RETRY_DELAY_MS = 5_000;
 const MAX_RECONCILE_RETRIES = 3;
@@ -185,22 +189,37 @@ export class MissionController {
    * Reconcile a Mission — drive its lifecycle through phases.
    */
   async reconcileMission(mission: MissionResource): Promise<void> {
-    const phase = mission.status?.phase;
+    const span = tracer.startSpan('operator.reconcile_mission', {
+      attributes: {
+        'resource.name': mission.metadata.name,
+        'resource.namespace': mission.metadata.namespace ?? 'default',
+        'resource.phase': mission.status?.phase ?? 'Unknown',
+      },
+    });
+    try {
+      const phase = mission.status?.phase;
 
-    switch (phase) {
-      case undefined:
-      case 'Pending':
-        await this.reconcilePending(mission);
-        break;
-      case 'Running':
-        await this.reconcileRunning(mission);
-        break;
-      case 'Succeeded':
-        // Terminal phase — transition events already emitted during Running→Succeeded
-        break;
-      case 'Failed':
-        // Terminal phase — transition events already emitted during Running→Failed
-        break;
+      switch (phase) {
+        case undefined:
+        case 'Pending':
+          await this.reconcilePending(mission);
+          break;
+        case 'Running':
+          await this.reconcileRunning(mission);
+          break;
+        case 'Succeeded':
+          // Terminal phase — transition events already emitted during Running→Succeeded
+          break;
+        case 'Failed':
+          // Terminal phase — transition events already emitted during Running→Failed
+          break;
+      }
+      span.setStatus({ code: SpanStatusCode.OK });
+    } catch (err) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: String(err) });
+      throw err;
+    } finally {
+      span.end();
     }
   }
 
