@@ -2,4 +2,3 @@
 .github/ @timurvankov
 helmfile.yaml @timurvankov
 crds/ @timurvankov
-docker-compose*.yml @timurvankov
