@@ -403,3 +403,106 @@ export const ExperimentStatusSchema = z.object({
   message: z.string().optional(),
   suggestions: z.array(z.string()).optional(),
 });
+
+// --- Knowledge ---
+
+export const KnowledgeScopeLevelSchema = z.enum([
+  'platform',
+  'realm',
+  'formation',
+  'cell',
+]);
+
+export const KnowledgeScopeSchema = z.object({
+  level: KnowledgeScopeLevelSchema,
+  realmId: z.string().optional(),
+  formationId: z.string().optional(),
+  cellId: z.string().optional(),
+});
+
+export const FactSourceTypeSchema = z.enum([
+  'mission_extraction',
+  'experiment',
+  'user_input',
+  'promoted',
+  'explicit_remember',
+]);
+
+export const FactSourceSchema = z.object({
+  type: FactSourceTypeSchema,
+  missionId: z.string().optional(),
+  experimentId: z.string().optional(),
+  missionResult: z.string().optional(),
+  fromFactId: z.string().optional(),
+});
+
+export const FactSchema = z.object({
+  id: z.string().min(1),
+  content: z.string().min(1),
+  embedding: z.array(z.number()).optional(),
+  scope: KnowledgeScopeSchema,
+  source: FactSourceSchema,
+  confidence: z.number().min(0).max(1),
+  validFrom: z.string().datetime(),
+  validUntil: z.string().datetime().optional(),
+  tags: z.array(z.string()),
+});
+
+export const SearchOptionsSchema = z.object({
+  maxResults: z.number().int().positive().default(20),
+  minConfidence: z.number().min(0).max(1).default(0),
+  includeInvalidated: z.boolean().default(false),
+  semantic: z.boolean().default(true),
+  recency: z.enum(['prefer_recent', 'prefer_established', 'any']).default('any'),
+});
+
+// --- Blueprint ---
+
+export const BlueprintParameterTypeSchema = z.enum([
+  'string',
+  'integer',
+  'number',
+  'boolean',
+  'enum',
+]);
+
+export const BlueprintParameterSchema = z.object({
+  name: z.string().min(1),
+  type: BlueprintParameterTypeSchema,
+  default: z.unknown().optional(),
+  description: z.string().optional(),
+  values: z.array(z.unknown()).optional(),
+  min: z.number().optional(),
+  max: z.number().optional(),
+});
+
+export const BlueprintEvidenceSchema = z.object({
+  experiments: z.array(z.object({
+    name: z.string(),
+    finding: z.string(),
+  })).optional(),
+  successRate: z.number().min(0).max(1).optional(),
+  avgCompletionTime: z.number().nonnegative().optional(),
+  avgCost: z.number().nonnegative().optional(),
+});
+
+export const BlueprintSpecSchema = z.object({
+  description: z.string().optional(),
+  parameters: z.array(BlueprintParameterSchema),
+  formation: z.unknown(),
+  mission: z.unknown().optional(),
+  evidence: BlueprintEvidenceSchema.optional(),
+});
+
+export const BlueprintVersionSchema = z.object({
+  version: z.number().int().positive(),
+  createdAt: z.string().datetime(),
+  changes: z.string().optional(),
+});
+
+export const BlueprintStatusSchema = z.object({
+  usageCount: z.number().int().nonnegative().default(0),
+  lastUsed: z.string().datetime().optional(),
+  avgSuccessRate: z.number().min(0).max(1).optional(),
+  versions: z.array(BlueprintVersionSchema).optional(),
+});

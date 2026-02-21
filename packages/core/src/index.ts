@@ -49,6 +49,20 @@ export {
   TopologySpecSchema,
   TopologyTypeSchema,
   WorkingMemorySchema,
+  // Knowledge schemas
+  KnowledgeScopeLevelSchema,
+  KnowledgeScopeSchema,
+  FactSourceTypeSchema,
+  FactSourceSchema,
+  FactSchema,
+  SearchOptionsSchema,
+  // Blueprint schemas
+  BlueprintParameterTypeSchema,
+  BlueprintParameterSchema,
+  BlueprintEvidenceSchema,
+  BlueprintSpecSchema,
+  BlueprintVersionSchema,
+  BlueprintStatusSchema,
 } from './schemas.js';
 
 // TypeScript types (inferred from Zod)
@@ -102,6 +116,20 @@ export type {
   TopologySpec,
   TopologyType,
   WorkingMemory,
+  // Knowledge types
+  KnowledgeScopeLevel,
+  KnowledgeScope,
+  FactSourceType,
+  FactSource,
+  Fact,
+  SearchOptions,
+  // Blueprint types
+  BlueprintParameterType,
+  BlueprintParameter,
+  BlueprintEvidence,
+  BlueprintSpec,
+  BlueprintVersion,
+  BlueprintStatus,
 } from './types.js';
 
 // Error model

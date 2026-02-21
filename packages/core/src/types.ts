@@ -50,6 +50,18 @@ import type {
   TopologySpecSchema,
   TopologyTypeSchema,
   WorkingMemorySchema,
+  KnowledgeScopeLevelSchema,
+  KnowledgeScopeSchema,
+  FactSourceTypeSchema,
+  FactSourceSchema,
+  FactSchema,
+  SearchOptionsSchema,
+  BlueprintParameterTypeSchema,
+  BlueprintParameterSchema,
+  BlueprintEvidenceSchema,
+  BlueprintSpecSchema,
+  BlueprintVersionSchema,
+  BlueprintStatusSchema,
 } from './schemas.js';
 
 export type LocalBrain = z.infer<typeof LocalBrainSchema>;
@@ -107,3 +119,19 @@ export type ExperimentPhase = z.infer<typeof ExperimentPhaseSchema>;
 export type ExperimentRunStatus = z.infer<typeof ExperimentRunStatusSchema>;
 export type ExperimentRun = z.infer<typeof ExperimentRunSchema>;
 export type ExperimentStatus = z.infer<typeof ExperimentStatusSchema>;
+
+// Knowledge types
+export type KnowledgeScopeLevel = z.infer<typeof KnowledgeScopeLevelSchema>;
+export type KnowledgeScope = z.infer<typeof KnowledgeScopeSchema>;
+export type FactSourceType = z.infer<typeof FactSourceTypeSchema>;
+export type FactSource = z.infer<typeof FactSourceSchema>;
+export type Fact = z.infer<typeof FactSchema>;
+export type SearchOptions = z.infer<typeof SearchOptionsSchema>;
+
+// Blueprint types
+export type BlueprintParameterType = z.infer<typeof BlueprintParameterTypeSchema>;
+export type BlueprintParameter = z.infer<typeof BlueprintParameterSchema>;
+export type BlueprintEvidence = z.infer<typeof BlueprintEvidenceSchema>;
+export type BlueprintSpec = z.infer<typeof BlueprintSpecSchema>;
+export type BlueprintVersion = z.infer<typeof BlueprintVersionSchema>;
+export type BlueprintStatus = z.infer<typeof BlueprintStatusSchema>;
