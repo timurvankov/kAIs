@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -77,20 +77,22 @@ export function createProgram(): Command {
       console.log(`Message sent (id: ${data.messageId})`);
     });
 
-  program
-    .command('logs <cell>')
+  const logs = program.command('logs').description('Fetch logs');
+
+  logs
+    .command('cell <name>')
     .description('Fetch event logs for a Cell')
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .option('--limit <n>', 'Maximum number of log entries', '50')
     .option('--api-url <url>', 'API server URL')
-    .action(async (cell: string, opts: { namespace: string; limit: string; apiUrl?: string }) => {
+    .action(async (name: string, opts: { namespace: string; limit: string; apiUrl?: string }) => {
       const apiUrl = getApiUrl(opts);
       const params = new URLSearchParams({
         namespace: opts.namespace,
         limit: opts.limit,
       });
       const res = await fetch(
-        `${apiUrl}/api/v1/cells/${encodeURIComponent(cell)}/logs?${params.toString()}`,
+        `${apiUrl}/api/v1/cells/${encodeURIComponent(name)}/logs?${params.toString()}`,
       );
       if (!res.ok) {
         const text = await res.text();
@@ -105,6 +107,66 @@ export function createProgram(): Command {
       for (const log of data.logs) {
         const time = new Date(log.created_at).toLocaleTimeString();
         console.log(`[${time}] ${log.event_type.padEnd(18)} ${JSON.stringify(log.payload)}`);
+      }
+    });
+
+  logs
+    .command('formation <name>')
+    .description('Interleaved logs from all cells in a Formation')
+    .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
+    .option('--api-url <url>', 'API server URL')
+    .action(async (name: string, opts: { namespace: string; apiUrl?: string }) => {
+      const apiUrl = getApiUrl(opts);
+
+      // Get the formation to list cells
+      let formationJson: string;
+      try {
+        formationJson = execFileSync('kubectl', [
+          'get', 'formation', name, '-n', opts.namespace, '-o', 'json',
+        ], { encoding: 'utf-8' });
+      } catch {
+        console.error(`Error: failed to get formation "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
+      const formation = JSON.parse(formationJson) as {
+        spec: { cells: Array<{ name: string; replicas: number }> };
+      };
+
+      // Expand cell names
+      const cellNames: string[] = [];
+      for (const tpl of formation.spec.cells) {
+        for (let i = 0; i < tpl.replicas; i++) {
+          cellNames.push(`${tpl.name}-${i}`);
+        }
+      }
+
+      // Fetch logs for each cell in parallel
+      const params = new URLSearchParams({ namespace: opts.namespace });
+      const logPromises = cellNames.map(async (cellName) => {
+        const res = await fetch(
+          `${apiUrl}/api/v1/cells/${encodeURIComponent(cellName)}/logs?${params.toString()}`,
+        );
+        if (!res.ok) {
+          console.error(`Warning: failed to fetch logs for ${cellName} (${res.status})`);
+          return [];
+        }
+        const data = (await res.json()) as {
+          logs: Array<{ created_at: string; event_type: string; payload: unknown }>;
+        };
+        return data.logs.map((log) => ({ ...log, cellName }));
+      });
+
+      const allLogs = (await Promise.all(logPromises)).flat();
+
+      // Sort by timestamp and display
+      allLogs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+      for (const log of allLogs) {
+        const time = new Date(log.created_at).toLocaleTimeString();
+        console.log(
+          `[${time}] ${log.cellName.padEnd(20)} ${log.event_type.padEnd(18)} ${JSON.stringify(log.payload)}`,
+        );
       }
     });
 
@@ -236,10 +298,16 @@ export function createProgram(): Command {
       }
 
       // Get the formation to find the cell template index
-      const formationJson = execSync(
-        `kubectl get formation ${name} -n ${opts.namespace} -o json`,
-        { encoding: 'utf-8' },
-      );
+      let formationJson: string;
+      try {
+        formationJson = execFileSync('kubectl', [
+          'get', 'formation', name, '-n', opts.namespace, '-o', 'json',
+        ], { encoding: 'utf-8' });
+      } catch {
+        console.error(`Error: failed to get formation "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       const formation = JSON.parse(formationJson) as {
         spec: { cells: Array<{ name: string; replicas: number }> };
       };
@@ -256,65 +324,17 @@ export function createProgram(): Command {
       const patch = JSON.stringify([
         { op: 'replace', path: `/spec/cells/${cellIndex}/replicas`, value: replicas },
       ]);
-      execSync(
-        `kubectl patch formation ${name} -n ${opts.namespace} --type=json -p '${patch}'`,
-        { stdio: 'inherit' },
-      );
+      try {
+        execFileSync('kubectl', [
+          'patch', 'formation', name, '-n', opts.namespace,
+          '--type=json', '-p', patch,
+        ], { stdio: 'inherit' });
+      } catch {
+        console.error(`Error: failed to patch formation "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       console.log(`Scaled ${opts.cell} in formation ${name} to ${replicas} replicas`);
-    });
-
-  const logsFormation = program.command('logs-formation').description('Fetch logs for a Formation');
-
-  logsFormation
-    .command('formation <name>')
-    .description('Interleaved logs from all cells in a Formation')
-    .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
-    .option('--follow', 'Follow log output', false)
-    .option('--api-url <url>', 'API server URL')
-    .action(async (name: string, opts: { namespace: string; follow: boolean; apiUrl?: string }) => {
-      const apiUrl = getApiUrl(opts);
-
-      // Get the formation to list cells
-      const formationJson = execSync(
-        `kubectl get formation ${name} -n ${opts.namespace} -o json`,
-        { encoding: 'utf-8' },
-      );
-      const formation = JSON.parse(formationJson) as {
-        spec: { cells: Array<{ name: string; replicas: number }> };
-      };
-
-      // Expand cell names
-      const cellNames: string[] = [];
-      for (const tpl of formation.spec.cells) {
-        for (let i = 0; i < tpl.replicas; i++) {
-          cellNames.push(`${tpl.name}-${i}`);
-        }
-      }
-
-      // Fetch logs for each cell in parallel
-      const params = new URLSearchParams({ namespace: opts.namespace });
-      const logPromises = cellNames.map(async (cellName) => {
-        const res = await fetch(
-          `${apiUrl}/api/v1/cells/${encodeURIComponent(cellName)}/logs?${params.toString()}`,
-        );
-        if (!res.ok) return [];
-        const data = (await res.json()) as {
-          logs: Array<{ created_at: string; event_type: string; payload: unknown }>;
-        };
-        return data.logs.map((log) => ({ ...log, cellName }));
-      });
-
-      const allLogs = (await Promise.all(logPromises)).flat();
-
-      // Sort by timestamp and display
-      allLogs.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-      for (const log of allLogs) {
-        const time = new Date(log.created_at).toLocaleTimeString();
-        console.log(
-          `[${time}] ${log.cellName.padEnd(20)} ${log.event_type.padEnd(18)} ${JSON.stringify(log.payload)}`,
-        );
-      }
     });
 
   // ----- Mission commands -----
@@ -326,10 +346,16 @@ export function createProgram(): Command {
     .description('Show detailed mission status')
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .action((name: string, opts: { namespace: string }) => {
-      const missionJson = execSync(
-        `kubectl get mission ${name} -n ${opts.namespace} -o json`,
-        { encoding: 'utf-8' },
-      );
+      let missionJson: string;
+      try {
+        missionJson = execFileSync('kubectl', [
+          'get', 'mission', name, '-n', opts.namespace, '-o', 'json',
+        ], { encoding: 'utf-8' });
+      } catch {
+        console.error(`Error: failed to get mission "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       const missionObj = JSON.parse(missionJson);
       console.log(formatMissionStatus(missionObj));
     });
@@ -340,10 +366,16 @@ export function createProgram(): Command {
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .action((name: string, opts: { namespace: string }) => {
       const patch = JSON.stringify({ status: { phase: 'Pending' } });
-      execSync(
-        `kubectl patch mission ${name} -n ${opts.namespace} --type=merge --subresource=status -p '${patch}'`,
-        { stdio: 'inherit' },
-      );
+      try {
+        execFileSync('kubectl', [
+          'patch', 'mission', name, '-n', opts.namespace,
+          '--type=merge', '--subresource=status', '-p', patch,
+        ], { stdio: 'inherit' });
+      } catch {
+        console.error(`Error: failed to patch mission "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       console.log(`Mission ${name} set to Pending for retry`);
     });
 
@@ -352,11 +384,17 @@ export function createProgram(): Command {
     .description('Abort a mission by setting phase to Failed')
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .action((name: string, opts: { namespace: string }) => {
-      const patch = JSON.stringify({ status: { phase: 'Failed', message: 'Aborted by user' } });
-      execSync(
-        `kubectl patch mission ${name} -n ${opts.namespace} --type=merge --subresource=status -p '${patch}'`,
-        { stdio: 'inherit' },
-      );
+      const patch = JSON.stringify({ status: { phase: 'Failed', message: 'UserAborted' } });
+      try {
+        execFileSync('kubectl', [
+          'patch', 'mission', name, '-n', opts.namespace,
+          '--type=merge', '--subresource=status', '-p', patch,
+        ], { stdio: 'inherit' });
+      } catch {
+        console.error(`Error: failed to patch mission "${name}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       console.log(`Mission ${name} aborted`);
     });
 
@@ -369,10 +407,16 @@ export function createProgram(): Command {
     .description('Show ASCII graph of a Formation topology')
     .option('-n, --namespace <ns>', 'Kubernetes namespace', 'default')
     .action((formationName: string, opts: { namespace: string }) => {
-      const formationJson = execSync(
-        `kubectl get formation ${formationName} -n ${opts.namespace} -o json`,
-        { encoding: 'utf-8' },
-      );
+      let formationJson: string;
+      try {
+        formationJson = execFileSync('kubectl', [
+          'get', 'formation', formationName, '-n', opts.namespace, '-o', 'json',
+        ], { encoding: 'utf-8' });
+      } catch {
+        console.error(`Error: failed to get formation "${formationName}" in namespace "${opts.namespace}"`);
+        process.exitCode = 1;
+        return;
+      }
       const formation = JSON.parse(formationJson) as {
         spec: {
           cells: Array<{ name: string; replicas: number; spec: unknown }>;

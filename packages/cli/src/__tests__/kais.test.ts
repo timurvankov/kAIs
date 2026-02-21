@@ -6,6 +6,7 @@ import { createProgram } from '../kais.js';
 // ---------------------------------------------------------------------------
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -170,7 +171,7 @@ describe('kais CLI', () => {
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-      await runProgram(['logs', 'researcher', '--api-url', 'http://test:3000', '--limit', '10']);
+      await runProgram(['logs', 'cell', 'researcher', '--api-url', 'http://test:3000', '--limit', '10']);
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('http://test:3000/api/v1/cells/researcher/logs'),
@@ -306,8 +307,8 @@ describe('kais CLI', () => {
 
   describe('scale formation command', () => {
     it('generates correct kubectl patch for scaling', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       // First call returns the formation JSON
       const formationJson = JSON.stringify({
@@ -319,17 +320,18 @@ describe('kais CLI', () => {
           ],
         },
       });
-      mockedExec.mockReturnValueOnce(formationJson as any);
+      mockedExecFile.mockReturnValueOnce(formationJson as any);
       // Second call is the patch (stdio: inherit returns void)
-      mockedExec.mockReturnValueOnce(undefined as any);
+      mockedExecFile.mockReturnValueOnce(undefined as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['scale', 'formation', 'my-team', '--cell', 'developer', '--replicas', '5', '-n', 'prod']);
 
       // First call: get formation
-      expect(mockedExec).toHaveBeenCalledWith(
-        'kubectl get formation my-team -n prod -o json',
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['get', 'formation', 'my-team', '-n', 'prod', '-o', 'json'],
         { encoding: 'utf-8' },
       );
 
@@ -337,8 +339,9 @@ describe('kais CLI', () => {
       const expectedPatch = JSON.stringify([
         { op: 'replace', path: '/spec/cells/1/replicas', value: 5 },
       ]);
-      expect(mockedExec).toHaveBeenCalledWith(
-        `kubectl patch formation my-team -n prod --type=json -p '${expectedPatch}'`,
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['patch', 'formation', 'my-team', '-n', 'prod', '--type=json', '-p', expectedPatch],
         { stdio: 'inherit' },
       );
 
@@ -347,15 +350,15 @@ describe('kais CLI', () => {
     });
 
     it('errors when cell template not found', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       const formationJson = JSON.stringify({
         spec: {
           cells: [{ name: 'architect', replicas: 1 }],
         },
       });
-      mockedExec.mockReturnValueOnce(formationJson as any);
+      mockedExecFile.mockReturnValueOnce(formationJson as any);
 
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -384,14 +387,21 @@ describe('kais CLI', () => {
       expect(consoleSpy).toHaveBeenCalledWith('Error: --replicas is required');
       consoleSpy.mockRestore();
     });
+
+    it('errors when --replicas is not a valid number', async () => {
+      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await runProgram(['scale', 'formation', 'my-team', '--cell', 'worker', '--replicas', 'abc']);
+      expect(consoleSpy).toHaveBeenCalledWith('Error: --replicas must be a non-negative integer');
+      consoleSpy.mockRestore();
+    });
   });
 
   // ----- Formation logs command -----
 
-  describe('logs-formation command', () => {
+  describe('logs formation command', () => {
     it('fetches logs for all cells and interleaves by timestamp', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       const formationJson = JSON.stringify({
         spec: {
@@ -401,7 +411,7 @@ describe('kais CLI', () => {
           ],
         },
       });
-      mockedExec.mockReturnValueOnce(formationJson as any);
+      mockedExecFile.mockReturnValueOnce(formationJson as any);
 
       // Mock fetch for each cell's logs
       mockFetch
@@ -433,7 +443,7 @@ describe('kais CLI', () => {
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-      await runProgram(['logs-formation', 'formation', 'my-team', '--api-url', 'http://test:3000', '-n', 'prod']);
+      await runProgram(['logs', 'formation', 'my-team', '--api-url', 'http://test:3000', '-n', 'prod']);
 
       // Should have fetched logs for all 3 cells
       expect(mockFetch).toHaveBeenCalledTimes(3);
@@ -469,8 +479,8 @@ describe('kais CLI', () => {
 
   describe('mission status command', () => {
     it('formats mission status output correctly', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       const missionJson = JSON.stringify({
         metadata: { name: 'build-feature', namespace: 'default' },
@@ -499,14 +509,15 @@ describe('kais CLI', () => {
           ],
         },
       });
-      mockedExec.mockReturnValueOnce(missionJson as any);
+      mockedExecFile.mockReturnValueOnce(missionJson as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['mission', 'status', 'build-feature']);
 
-      expect(mockedExec).toHaveBeenCalledWith(
-        'kubectl get mission build-feature -n default -o json',
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['get', 'mission', 'build-feature', '-n', 'default', '-o', 'json'],
         { encoding: 'utf-8' },
       );
 
@@ -527,17 +538,18 @@ describe('kais CLI', () => {
 
   describe('mission retry command', () => {
     it('generates correct kubectl patch', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
-      mockedExec.mockReturnValueOnce(undefined as any);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
+      mockedExecFile.mockReturnValueOnce(undefined as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['mission', 'retry', 'build-feature', '-n', 'prod']);
 
       const expectedPatch = JSON.stringify({ status: { phase: 'Pending' } });
-      expect(mockedExec).toHaveBeenCalledWith(
-        `kubectl patch mission build-feature -n prod --type=merge --subresource=status -p '${expectedPatch}'`,
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['patch', 'mission', 'build-feature', '-n', 'prod', '--type=merge', '--subresource=status', '-p', expectedPatch],
         { stdio: 'inherit' },
       );
 
@@ -546,16 +558,17 @@ describe('kais CLI', () => {
     });
 
     it('uses default namespace', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
-      mockedExec.mockReturnValueOnce(undefined as any);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
+      mockedExecFile.mockReturnValueOnce(undefined as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['mission', 'retry', 'my-mission']);
 
-      expect(mockedExec).toHaveBeenCalledWith(
-        expect.stringContaining('-n default'),
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        expect.arrayContaining(['-n', 'default']),
         { stdio: 'inherit' },
       );
       consoleSpy.mockRestore();
@@ -564,17 +577,18 @@ describe('kais CLI', () => {
 
   describe('mission abort command', () => {
     it('generates correct kubectl patch', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
-      mockedExec.mockReturnValueOnce(undefined as any);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
+      mockedExecFile.mockReturnValueOnce(undefined as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['mission', 'abort', 'build-feature', '-n', 'staging']);
 
-      const expectedPatch = JSON.stringify({ status: { phase: 'Failed', message: 'Aborted by user' } });
-      expect(mockedExec).toHaveBeenCalledWith(
-        `kubectl patch mission build-feature -n staging --type=merge --subresource=status -p '${expectedPatch}'`,
+      const expectedPatch = JSON.stringify({ status: { phase: 'Failed', message: 'UserAborted' } });
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['patch', 'mission', 'build-feature', '-n', 'staging', '--type=merge', '--subresource=status', '-p', expectedPatch],
         { stdio: 'inherit' },
       );
 
@@ -587,8 +601,8 @@ describe('kais CLI', () => {
 
   describe('topology show command', () => {
     it('renders topology ASCII graph from kubectl output', async () => {
-      const { execSync } = await import('node:child_process');
-      const mockedExec = vi.mocked(execSync);
+      const { execFileSync } = await import('node:child_process');
+      const mockedExecFile = vi.mocked(execFileSync);
 
       const formationJson = JSON.stringify({
         spec: {
@@ -607,19 +621,19 @@ describe('kais CLI', () => {
           },
         },
       });
-      mockedExec.mockReturnValueOnce(formationJson as any);
+      mockedExecFile.mockReturnValueOnce(formationJson as any);
 
       const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
       await runProgram(['topology', 'show', 'my-team', '-n', 'prod']);
 
-      expect(mockedExec).toHaveBeenCalledWith(
-        'kubectl get formation my-team -n prod -o json',
+      expect(mockedExecFile).toHaveBeenCalledWith(
+        'kubectl',
+        ['get', 'formation', 'my-team', '-n', 'prod', '-o', 'json'],
         { encoding: 'utf-8' },
       );
 
       const output = consoleSpy.mock.calls[0]![0] as string;
-      expect(output).toContain('Topology: custom');
       expect(output).toContain('architect-0');
       expect(output).toContain('developer-0');
       expect(output).toContain('developer-1');

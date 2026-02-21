@@ -138,55 +138,55 @@ describe('generateRouteTable', () => {
 // ---------------------------------------------------------------------------
 
 describe('renderTopology', () => {
-  it('renders full_mesh topology', () => {
+  it('renders full_mesh topology without header', () => {
     const topology: TopologySpec = { type: 'full_mesh' };
     const cells = [cell('alpha', 2)];
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: full_mesh');
+    expect(output).not.toContain('Topology:');
     expect(output).toContain('alpha-0');
     expect(output).toContain('alpha-1');
     expect(output).toContain('\u2500\u2500\u2192'); // ──→
   });
 
-  it('renders hierarchy topology', () => {
+  it('renders hierarchy topology without header', () => {
     const topology: TopologySpec = { type: 'hierarchy', root: 'lead' };
     const cells = [cell('lead', 1), cell('worker', 2)];
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: hierarchy');
+    expect(output).not.toContain('Topology:');
     expect(output).toContain('lead-0');
     expect(output).toContain('worker-0');
     expect(output).toContain('worker-1');
   });
 
-  it('renders star topology', () => {
+  it('renders star topology without header', () => {
     const topology: TopologySpec = { type: 'star', hub: 'hub' };
     const cells = [cell('hub', 1), cell('spoke', 2)];
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: star');
+    expect(output).not.toContain('Topology:');
     expect(output).toContain('hub-0');
     expect(output).toContain('spoke-0');
     expect(output).toContain('spoke-1');
   });
 
-  it('renders ring topology', () => {
+  it('renders ring topology without header', () => {
     const topology: TopologySpec = { type: 'ring' };
     const cells = [cell('node', 3)];
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: ring');
+    expect(output).not.toContain('Topology:');
     expect(output).toContain('node-0');
     expect(output).toContain('node-1');
     expect(output).toContain('node-2');
   });
 
-  it('renders custom topology with aligned arrows', () => {
+  it('renders custom topology with aligned arrows and pipe connectors', () => {
     const topology: TopologySpec = {
       type: 'custom',
       routes: [
@@ -199,21 +199,28 @@ describe('renderTopology', () => {
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: custom');
+    expect(output).not.toContain('Topology:');
     // architect-0 should have 3 targets (developer-0, developer-1, reviewer-0)
     const lines = output.split('\n');
     const architectLine = lines.find((l) => l.includes('architect-0') && l.includes('\u2500\u2500\u2192'));
     expect(architectLine).toBeDefined();
     expect(architectLine).toContain('developer-0');
 
+    // Continuation lines for architect-0 should use │ connector
+    const pipeLines = lines.filter((l) => l.includes('\u2502') && l.includes('\u2500\u2500\u2192'));
+    expect(pipeLines.length).toBeGreaterThan(0);
+
+    // architect-0 has 3+ targets, so there should be a trailing │ separator
+    const separatorLines = lines.filter((l) => l.trim() === '\u2502');
+    expect(separatorLines.length).toBeGreaterThan(0);
+
     // reviewer-0 should route to architect-0
-    // Use trimStart to match lines where reviewer-0 is the *source* (not a target in a continuation line)
     const reviewerLine = lines.find((l) => l.trimStart().startsWith('reviewer-0') && l.includes('\u2500\u2500\u2192'));
     expect(reviewerLine).toBeDefined();
     expect(reviewerLine).toContain('architect-0');
   });
 
-  it('renders stigmergy topology with blackboard info', () => {
+  it('renders stigmergy topology with blackboard info (no header)', () => {
     const topology: TopologySpec = {
       type: 'stigmergy',
       blackboard: { decayMinutes: 15 },
@@ -222,7 +229,7 @@ describe('renderTopology', () => {
 
     const output = renderTopology(topology, cells);
 
-    expect(output).toContain('Topology: stigmergy');
+    expect(output).not.toContain('Topology:');
     expect(output).toContain('communication via blackboard only');
     expect(output).toContain('15 minutes');
   });

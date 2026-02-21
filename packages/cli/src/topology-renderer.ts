@@ -162,7 +162,8 @@ export function generateRouteTable(
  *
  * Output format:
  *   cellName    ──→ target1
- *               ──→ target2
+ *       │       ──→ target2
+ *       │
  *   otherCell   ──→ target3
  *
  * For stigmergy (no direct routes):
@@ -176,10 +177,6 @@ export function renderTopology(
   const allNames = expandCellNames(cells);
   const lines: string[] = [];
 
-  // Header
-  lines.push(`Topology: ${topology.type}`);
-  lines.push('');
-
   if (topology.type === 'stigmergy') {
     lines.push('  (stigmergy — communication via blackboard only)');
     if (topology.blackboard) {
@@ -189,7 +186,7 @@ export function renderTopology(
   }
 
   // Find max cell name length for alignment
-  const maxNameLen = Math.max(...allNames.map((n) => n.length));
+  const maxNameLen = allNames.length > 0 ? Math.max(...allNames.map((n) => n.length)) : 0;
 
   for (const name of allNames) {
     const targets = routes[name] ?? [];
@@ -198,9 +195,16 @@ export function renderTopology(
     } else {
       // First target on the same line as the cell name
       lines.push(`  ${name.padEnd(maxNameLen)} ──→ ${targets[0]}`);
-      // Subsequent targets indented
+      // Subsequent targets: use │ connector aligned under the name
+      // Position the │ pipe connector 4 chars into the name column (or at name.length if shorter)
+      const pipeCol = Math.min(4, name.length);
+      const pipePrefix = `  ${' '.repeat(pipeCol)}│${' '.repeat(maxNameLen - pipeCol - 1)}`;
       for (let i = 1; i < targets.length; i++) {
-        lines.push(`  ${' '.repeat(maxNameLen)} ──→ ${targets[i]}`);
+        lines.push(`${pipePrefix} ──→ ${targets[i]}`);
+      }
+      // Add trailing │ separator line for multi-target entries
+      if (targets.length >= 3) {
+        lines.push(`  ${' '.repeat(pipeCol)}│`);
       }
     }
   }
