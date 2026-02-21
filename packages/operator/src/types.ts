@@ -1,4 +1,11 @@
-import type { CellSpec, CellStatus, FormationSpec, FormationStatus } from '@kais/core';
+import type {
+  CellSpec,
+  CellStatus,
+  FormationSpec,
+  FormationStatus,
+  MissionSpec,
+  MissionStatus,
+} from '@kais/core';
 import type * as k8s from '@kubernetes/client-node';
 
 /**
@@ -38,6 +45,23 @@ export interface FormationResource {
 }
 
 /**
+ * Kubernetes custom resource representing a Mission.
+ * Matches the Mission CRD defined in crds/mission-crd.yaml.
+ */
+export interface MissionResource {
+  apiVersion: 'kais.io/v1';
+  kind: 'Mission';
+  metadata: {
+    name: string;
+    namespace: string;
+    uid: string;
+    resourceVersion: string;
+  };
+  spec: MissionSpec;
+  status?: MissionStatus;
+}
+
+/**
  * Event types emitted by the CellController.
  */
 export type CellEventType = 'CellCreated' | 'CellRunning' | 'CellFailed' | 'CellDeleted';
@@ -53,6 +77,17 @@ export type FormationEventType =
   | 'CellCreated'
   | 'CellDeleted'
   | 'CellUpdated';
+
+/**
+ * Event types emitted by the MissionController.
+ */
+export type MissionEventType =
+  | 'MissionStarted'
+  | 'MissionTimeout'
+  | 'MissionRetry'
+  | 'MissionCompleted'
+  | 'MissionFailed'
+  | 'MissionReviewRequested';
 
 /**
  * Abstraction over the K8s API calls used by CellController and FormationController.
@@ -141,4 +176,53 @@ export interface KubeClient {
     reason: string,
     message: string,
   ): Promise<void>;
+
+  // --- Mission management ---
+
+  /** Update the status subresource of a Mission CRD. */
+  updateMissionStatus(
+    name: string,
+    namespace: string,
+    status: MissionStatus,
+  ): Promise<void>;
+
+  /** Create a K8s Event for a Mission. */
+  emitMissionEvent(
+    mission: MissionResource,
+    eventType: MissionEventType,
+    reason: string,
+    message: string,
+  ): Promise<void>;
+}
+
+/**
+ * Abstraction over NATS messaging used by MissionController.
+ * Publishes envelopes to cell inboxes.
+ */
+export interface NatsClient {
+  /** Send a message to a cell's inbox via NATS. */
+  sendMessageToCell(
+    cellName: string,
+    namespace: string,
+    message: string,
+  ): Promise<void>;
+}
+
+/**
+ * Abstraction over command execution for check-runner testability.
+ */
+export interface CommandExecutor {
+  /** Execute a command in the given working directory. Returns { stdout, stderr, exitCode }. */
+  exec(
+    command: string,
+    cwd: string,
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+}
+
+/**
+ * Abstraction over filesystem operations for check-runner testability.
+ */
+export interface FileSystem {
+  /** Check if a file or directory exists at the given path. */
+  exists(path: string): Promise<boolean>;
 }
