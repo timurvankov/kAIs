@@ -21,6 +21,10 @@ spec:
             spec:
               type: object
               properties:
+                # At least one of formationRef or cellRef is required.
+                # This constraint is enforced by the operator, not the CRD schema,
+                # because OpenAPI v3 validation in CRDs does not support cross-field
+                # conditional requirements (oneOf/anyOf on required fields).
                 formationRef:
                   type: string
                 cellRef:

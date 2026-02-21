@@ -135,6 +135,35 @@ export const TopologySpecSchema = z.object({
   routes: z.array(TopologyRouteSchema).optional(),
   broadcast: TopologyBroadcastSchema.optional(),
   blackboard: TopologyBlackboardSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.type === 'hierarchy' && !data.root) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'hierarchy topology requires root',
+      path: ['root'],
+    });
+  }
+  if (data.type === 'star' && !data.hub) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'star topology requires hub',
+      path: ['hub'],
+    });
+  }
+  if (data.type === 'custom' && (!data.routes || data.routes.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'custom topology requires routes',
+      path: ['routes'],
+    });
+  }
+  if (data.type === 'stigmergy' && !data.blackboard) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'stigmergy topology requires blackboard',
+      path: ['blackboard'],
+    });
+  }
 });
 
 // --- FormationBudget ---
@@ -167,7 +196,7 @@ export const FormationPhaseSchema = z.enum(['Pending', 'Running', 'Paused', 'Com
 
 export const FormationCellStatusSchema = z.object({
   name: z.string().min(1),
-  phase: z.string().min(1),
+  phase: CellPhaseSchema,
   cost: z.number().nonnegative(),
 });
 

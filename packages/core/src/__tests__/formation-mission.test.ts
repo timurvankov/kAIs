@@ -5,6 +5,7 @@ import {
   CellTemplateSchema,
   CompletionCheckSchema,
   FormationBudgetSchema,
+  FormationCellStatusSchema,
   FormationSpecSchema,
   FormationStatusSchema,
   MissionCompletionSchema,
@@ -64,9 +65,17 @@ const validMissionSpec = {
 // --- TopologySpec ---
 
 describe('TopologySpecSchema', () => {
-  it('accepts all valid topology types', () => {
-    for (const type of ['full_mesh', 'hierarchy', 'star', 'ring', 'stigmergy', 'custom'] as const) {
-      const result = TopologySpecSchema.parse({ type });
+  it('accepts all valid topology types with required fields', () => {
+    const configs = {
+      full_mesh: {},
+      hierarchy: { root: 'coordinator' },
+      star: { hub: 'central-node' },
+      ring: {},
+      stigmergy: { blackboard: { decayMinutes: 60 } },
+      custom: { routes: [{ from: 'a', to: ['b'] }] },
+    } as const;
+    for (const [type, extra] of Object.entries(configs)) {
+      const result = TopologySpecSchema.parse({ type, ...extra });
       expect(result.type).toBe(type);
     }
   });
@@ -156,6 +165,46 @@ describe('TopologySpecSchema', () => {
         blackboard: { decayMinutes: -5 },
       }),
     ).toThrow();
+  });
+
+  it('rejects hierarchy without root', () => {
+    expect(() =>
+      TopologySpecSchema.parse({ type: 'hierarchy' }),
+    ).toThrow('hierarchy topology requires root');
+  });
+
+  it('rejects star without hub', () => {
+    expect(() =>
+      TopologySpecSchema.parse({ type: 'star' }),
+    ).toThrow('star topology requires hub');
+  });
+
+  it('rejects custom without routes', () => {
+    expect(() =>
+      TopologySpecSchema.parse({ type: 'custom' }),
+    ).toThrow('custom topology requires routes');
+  });
+
+  it('rejects custom with empty routes array', () => {
+    expect(() =>
+      TopologySpecSchema.parse({ type: 'custom', routes: [] }),
+    ).toThrow('custom topology requires routes');
+  });
+
+  it('rejects stigmergy without blackboard', () => {
+    expect(() =>
+      TopologySpecSchema.parse({ type: 'stigmergy' }),
+    ).toThrow('stigmergy topology requires blackboard');
+  });
+
+  it('accepts full_mesh without extra fields', () => {
+    const result = TopologySpecSchema.parse({ type: 'full_mesh' });
+    expect(result.type).toBe('full_mesh');
+  });
+
+  it('accepts ring without extra fields', () => {
+    const result = TopologySpecSchema.parse({ type: 'ring' });
+    expect(result.type).toBe('ring');
   });
 });
 
@@ -383,6 +432,29 @@ describe('FormationStatusSchema', () => {
         totalCells: 0,
         totalCost: -1,
       }),
+    ).toThrow();
+  });
+});
+
+// --- FormationCellStatus ---
+
+describe('FormationCellStatusSchema', () => {
+  it('accepts valid CellPhase values', () => {
+    for (const phase of ['Pending', 'Running', 'Completed', 'Failed', 'Paused'] as const) {
+      const result = FormationCellStatusSchema.parse({ name: 'worker', phase, cost: 0 });
+      expect(result.phase).toBe(phase);
+    }
+  });
+
+  it('rejects invalid phase value', () => {
+    expect(() =>
+      FormationCellStatusSchema.parse({ name: 'worker', phase: 'Unknown', cost: 0 }),
+    ).toThrow();
+  });
+
+  it('rejects arbitrary string phase', () => {
+    expect(() =>
+      FormationCellStatusSchema.parse({ name: 'worker', phase: 'starting-up', cost: 0 }),
     ).toThrow();
   });
 });
