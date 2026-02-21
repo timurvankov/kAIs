@@ -401,23 +401,27 @@ async function createNatsClient(): Promise<NatsClient> {
 
   // Set up JetStream stream for cell outbox messages so natsResponse checks
   // can read messages published before the subscription was created.
-  const jsm = await nc.jetstreamManager();
+  let js: ReturnType<typeof nc.jetstream> | null = null;
   try {
-    await jsm.streams.info('CELL_OUTBOX');
-    console.log('[kais-operator] JetStream stream CELL_OUTBOX already exists');
-  } catch {
-    await jsm.streams.add({
-      name: 'CELL_OUTBOX',
-      subjects: ['cell.*.*.outbox'],
-      retention: RetentionPolicy.Limits,
-      storage: StorageType.Memory,
-      max_msgs_per_subject: 64,
-      max_age: 600_000_000_000, // 10 minutes in nanoseconds
-    });
-    console.log('[kais-operator] Created JetStream stream CELL_OUTBOX');
+    const jsm = await nc.jetstreamManager();
+    try {
+      await jsm.streams.info('CELL_OUTBOX');
+      console.log('[kais-operator] JetStream stream CELL_OUTBOX already exists');
+    } catch {
+      await jsm.streams.add({
+        name: 'CELL_OUTBOX',
+        subjects: ['cell.*.*.outbox'],
+        retention: RetentionPolicy.Limits,
+        storage: StorageType.Memory,
+        max_msgs_per_subject: 64,
+        max_age: 600_000_000_000, // 10 minutes in nanoseconds
+      });
+      console.log('[kais-operator] Created JetStream stream CELL_OUTBOX');
+    }
+    js = nc.jetstream();
+  } catch (err) {
+    console.warn('[kais-operator] JetStream setup failed (natsResponse checks will not work):', err);
   }
-
-  const js = nc.jetstream();
 
   return {
     async sendMessageToCell(cellName, namespace, message) {
@@ -434,6 +438,7 @@ async function createNatsClient(): Promise<NatsClient> {
     },
 
     async waitForMessage(subject, timeoutMs) {
+      if (!js) return null;
       // Use JetStream ordered consumer to read retained messages (including
       // those published before this call). DeliverPolicy.All ensures we get
       // the first message on the subject even if it was published earlier.

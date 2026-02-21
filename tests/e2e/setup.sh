@@ -56,6 +56,8 @@ else
   helm repo add nats https://nats-io.github.io/k8s/helm/charts/ 2>/dev/null || true
   helm upgrade --install kais-nats nats/nats \
     --set config.jetstream.enabled=true \
+    --set config.jetstream.memoryStore.enabled=true \
+    --set config.jetstream.memoryStore.maxSize=256Mi \
     --wait --timeout 120s
 fi
 
