@@ -2,6 +2,7 @@
  * send_message tool — publish a message to another Cell's inbox via NATS.
  */
 import { createEnvelope } from '@kais/core';
+import { z } from 'zod';
 
 import type { Tool } from './tool-executor.js';
 
@@ -28,11 +29,11 @@ export function createSendMessageTool(config: SendMessageConfig): Tool {
       required: ['to', 'message'],
     },
     async execute(input: unknown): Promise<string> {
-      const { to, message } = input as { to: string; message: string };
-
-      if (!to || !message) {
-        throw new Error('Both "to" and "message" are required');
-      }
+      const SendMessageInput = z.object({
+        to: z.string().min(1, '"to" must be a non-empty string'),
+        message: z.string().min(1, '"message" must be a non-empty string'),
+      });
+      const { to, message } = SendMessageInput.parse(input);
 
       const envelope = createEnvelope({
         from: config.cellName,

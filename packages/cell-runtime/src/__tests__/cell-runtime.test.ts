@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { MockMind } from '@kais/mind';
 import type { CellSpec } from '@kais/core';
 
-import { CellRuntime } from '../cell-runtime.js';
+import { CellRuntime, BudgetTracker } from '../cell-runtime.js';
 import type { Tool } from '../tools/tool-executor.js';
 import { MockNatsConnection, makeThinkOutput, makeEnvelope } from './helpers.js';
 
@@ -375,6 +375,142 @@ describe('CellRuntime', () => {
       const callMessages = mind.calls[0]!.messages;
       // Should JSON.stringify the payload
       expect(callMessages[1]!.content).toBe('{"data":123,"flag":true}');
+    });
+  });
+
+  describe('serial message processing (C1)', () => {
+    it('processes messages sequentially when injected rapidly', async () => {
+      const processingOrder: string[] = [];
+
+      // Create a slow echo tool that records execution order
+      const slowTool: Tool = {
+        name: 'slow_echo',
+        description: 'Slow echo',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+        async execute(input: unknown): Promise<string> {
+          const text = (input as { text: string }).text;
+          processingOrder.push(`start:${text}`);
+          await new Promise(r => setTimeout(r, 20));
+          processingOrder.push(`end:${text}`);
+          return `Echo: ${text}`;
+        },
+      };
+
+      // First message: tool use -> final response
+      mind.enqueue(makeThinkOutput({
+        content: '',
+        stopReason: 'tool_use',
+        toolCalls: [{ id: 'tc-1', name: 'slow_echo', input: { text: 'first' } }],
+      }));
+      mind.enqueue(makeThinkOutput({ content: 'Response 1', stopReason: 'end_turn' }));
+
+      // Second message: tool use -> final response
+      mind.enqueue(makeThinkOutput({
+        content: '',
+        stopReason: 'tool_use',
+        toolCalls: [{ id: 'tc-2', name: 'slow_echo', input: { text: 'second' } }],
+      }));
+      mind.enqueue(makeThinkOutput({ content: 'Response 2', stopReason: 'end_turn' }));
+
+      const runtime = new CellRuntime({
+        cellName: 'test-cell',
+        namespace: 'default',
+        spec: makeSpec(),
+        mind,
+        nats,
+        tools: [slowTool],
+      });
+
+      await runtime.start();
+
+      // Inject two messages rapidly (no await between)
+      const envelope1 = makeEnvelope({ payload: { content: 'msg 1' } });
+      const envelope2 = makeEnvelope({ payload: { content: 'msg 2' } });
+      nats.inject('cell.default.test-cell.inbox', envelope1);
+      nats.inject('cell.default.test-cell.inbox', envelope2);
+
+      // Wait for both to finish processing
+      await new Promise(r => setTimeout(r, 200));
+
+      // Verify sequential processing: first must complete before second starts
+      expect(processingOrder).toEqual([
+        'start:first',
+        'end:first',
+        'start:second',
+        'end:second',
+      ]);
+
+      await runtime.stop();
+    });
+  });
+
+  describe('max iterations (I6)', () => {
+    it('publishes response and event when max iterations reached', async () => {
+      // Enqueue 21 tool-use responses (more than the 20-iteration limit)
+      for (let i = 0; i < 21; i++) {
+        mind.enqueue(makeThinkOutput({
+          content: '',
+          stopReason: 'tool_use',
+          toolCalls: [{ id: `tc-${i}`, name: 'echo', input: { text: `iter-${i}` } }],
+        }));
+      }
+
+      const runtime = new CellRuntime({
+        cellName: 'test-cell',
+        namespace: 'default',
+        spec: makeSpec(),
+        mind,
+        nats,
+        tools: [makeEchoTool()],
+        workingMemoryConfig: { maxMessages: 200, summarizeAfter: 200 },
+      });
+
+      const envelope = makeEnvelope({ payload: { content: 'Loop forever' } });
+      await runtime.processMessage(envelope);
+
+      // Mind should have been called exactly 20 times (the max)
+      expect(mind.calls).toHaveLength(20);
+
+      // Should have published a max-iterations response to outbox
+      const outboxMessages = nats.getPublished('cell.default.test-cell.outbox');
+      expect(outboxMessages).toHaveLength(1);
+      const response = JSON.parse(outboxMessages[0]!.data);
+      expect(response.payload.content).toContain('Maximum tool call iterations reached');
+
+      // Should have published a max_iterations event
+      const events = nats.getPublished('cell.events.default.test-cell');
+      const maxIterEvent = events.map(e => JSON.parse(e.data)).find(e => e.type === 'max_iterations');
+      expect(maxIterEvent).toBeDefined();
+      expect(maxIterEvent.iterations).toBe(20);
+    });
+  });
+
+  describe('BudgetTracker pruning (I5)', () => {
+    it('prunes cost entries older than 1 hour', () => {
+      const tracker = new BudgetTracker(1.0, undefined); // $1/hour max
+
+      // Manually manipulate Date.now to simulate old entries
+      const now = Date.now();
+      const realDateNow = Date.now;
+
+      // Add a cost entry "2 hours ago"
+      vi.spyOn(Date, 'now').mockReturnValue(now - 7_200_000);
+      tracker.addCost(0.5);
+
+      // Add a cost entry "now"
+      vi.spyOn(Date, 'now').mockReturnValue(now);
+      tracker.addCost(0.3);
+
+      // isExceeded should only consider the recent entry (0.3 < 1.0)
+      expect(tracker.isExceeded()).toBe(false);
+
+      // The old entry should have been pruned
+      // Add more cost to push over the hourly limit
+      tracker.addCost(0.8);
+      // Now recent cost = 0.3 + 0.8 = 1.1 > 1.0
+      expect(tracker.isExceeded()).toBe(true);
+
+      vi.restoreAllMocks();
     });
   });
 });

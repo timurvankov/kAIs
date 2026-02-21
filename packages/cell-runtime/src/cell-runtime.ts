@@ -65,9 +65,9 @@ export class BudgetTracker {
 
     if (this.maxCostPerHour !== undefined) {
       const oneHourAgo = Date.now() - 3_600_000;
-      const recentCost = this.costEntries
-        .filter(e => e.timestamp >= oneHourAgo)
-        .reduce((sum, e) => sum + e.cost, 0);
+      // Prune entries older than 1 hour to prevent unbounded growth (I5)
+      this.costEntries = this.costEntries.filter(e => e.timestamp >= oneHourAgo);
+      const recentCost = this.costEntries.reduce((sum, e) => sum + e.cost, 0);
       if (recentCost >= this.maxCostPerHour) {
         return true;
       }
@@ -82,9 +82,9 @@ export class BudgetTracker {
     }
     if (this.maxCostPerHour !== undefined) {
       const oneHourAgo = Date.now() - 3_600_000;
-      const recentCost = this.costEntries
-        .filter(e => e.timestamp >= oneHourAgo)
-        .reduce((sum, e) => sum + e.cost, 0);
+      // Prune entries older than 1 hour to prevent unbounded growth (I5)
+      this.costEntries = this.costEntries.filter(e => e.timestamp >= oneHourAgo);
+      const recentCost = this.costEntries.reduce((sum, e) => sum + e.cost, 0);
       if (recentCost >= this.maxCostPerHour) {
         return `Hourly cost $${recentCost.toFixed(4)} exceeds max $${this.maxCostPerHour}/hour`;
       }
@@ -121,6 +121,10 @@ export class CellRuntime {
   private subscription: NatsSubscription | null = null;
   private paused = false;
   private running = false;
+
+  // Serial message processing queue (C1: concurrency protection)
+  private messageQueue: Envelope[] = [];
+  private processing = false;
 
   constructor(config: CellRuntimeConfig) {
     this.cellName = config.cellName;
@@ -165,14 +169,11 @@ export class CellRuntime {
     const inboxSubject = `cell.${this.namespace}.${this.cellName}.inbox`;
 
     this.subscription = this.nats.subscribe(inboxSubject, (msg: NatsMessage) => {
-      // Parse envelope and process asynchronously
+      // Parse envelope and enqueue for serial processing
       try {
         const text = new TextDecoder().decode(msg.data);
         const envelope = JSON.parse(text) as Envelope;
-        // Fire and forget — errors are handled inside processMessage
-        this.processMessage(envelope).catch(err => {
-          this.publishEvent('error', { error: String(err) });
-        });
+        this.enqueueMessage(envelope);
       } catch (err) {
         this.publishEvent('error', { error: `Failed to parse message: ${String(err)}` });
       }
@@ -193,8 +194,8 @@ export class CellRuntime {
       this.subscription = null;
     }
 
-    await this.nats.drain();
     this.publishEvent('stopped', { cellName: this.cellName });
+    await this.nats.drain();
   }
 
   /**
@@ -223,6 +224,7 @@ export class CellRuntime {
     // Agentic loop
     let iterations = 0;
     const maxIterations = 20; // safety limit
+    let responded = false;
 
     while (iterations < maxIterations) {
       iterations++;
@@ -318,7 +320,23 @@ export class CellRuntime {
         totalCost: this.budget.getTotalCost(),
       });
 
+      responded = true;
       break;
+    }
+
+    // I6: If max iterations reached without a final response, notify the caller
+    if (!responded) {
+      const maxIterMsg: Message = {
+        role: 'assistant',
+        content: 'Maximum tool call iterations reached. Stopping.',
+      };
+      this.workingMemory.addMessage(maxIterMsg);
+      this.publishOutbox(maxIterMsg, envelope);
+      this.publishEvent('max_iterations', {
+        messageId: envelope.id,
+        iterations: maxIterations,
+        totalCost: this.budget.getTotalCost(),
+      });
     }
   }
 
@@ -357,6 +375,33 @@ export class CellRuntime {
     };
     const encoded = new TextEncoder().encode(JSON.stringify(event));
     this.nats.publish(eventsSubject, encoded);
+  }
+
+  /**
+   * Enqueue a message for serial processing (C1: concurrency protection).
+   */
+  private enqueueMessage(envelope: Envelope): void {
+    this.messageQueue.push(envelope);
+    if (!this.processing) {
+      this.drainQueue().catch(err => {
+        this.publishEvent('error', { error: String(err) });
+      });
+    }
+  }
+
+  /**
+   * Drain the message queue, processing one message at a time.
+   */
+  private async drainQueue(): Promise<void> {
+    this.processing = true;
+    try {
+      while (this.messageQueue.length > 0) {
+        const envelope = this.messageQueue.shift()!;
+        await this.processMessage(envelope);
+      }
+    } finally {
+      this.processing = false;
+    }
   }
 
   // --- Accessors for testing ---

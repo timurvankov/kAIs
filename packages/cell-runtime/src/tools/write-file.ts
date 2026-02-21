@@ -1,6 +1,10 @@
 /**
  * write_file tool — write a file to the Cell's private workspace.
  */
+import { resolve } from 'node:path';
+
+import { z } from 'zod';
+
 import type { Tool } from './tool-executor.js';
 
 export interface WriteFileSystem {
@@ -26,13 +30,19 @@ export function createWriteFileTool(config: WriteFileConfig): Tool {
       required: ['path', 'content'],
     },
     async execute(input: unknown): Promise<string> {
-      const { path, content } = input as { path: string; content: string };
+      const WriteFileInput = z.object({
+        path: z.string().min(1, '"path" must be a non-empty string'),
+        content: z.string(),
+      });
+      const { path, content } = WriteFileInput.parse(input);
 
-      if (!path || content === undefined) {
-        throw new Error('Both "path" and "content" are required');
+      const baseDir = `/workspace/private/${config.cellName}`;
+      const resolvedPath = resolve(baseDir, path);
+
+      // I4: Path traversal protection
+      if (!resolvedPath.startsWith(baseDir + '/') && resolvedPath !== baseDir) {
+        throw new Error('Path traversal not allowed: path must be within workspace');
       }
-
-      const resolvedPath = `/workspace/private/${config.cellName}/${path}`;
 
       // Ensure directory exists
       const dirPath = resolvedPath.substring(0, resolvedPath.lastIndexOf('/'));

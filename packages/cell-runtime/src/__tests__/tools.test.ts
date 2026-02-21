@@ -43,6 +43,23 @@ describe('send_message tool', () => {
     await expect(tool.execute({ to: '', message: 'hi' })).rejects.toThrow();
     await expect(tool.execute({ to: 'target', message: '' })).rejects.toThrow();
   });
+
+  it('throws on malformed input (I3)', async () => {
+    const tool = createSendMessageTool({
+      cellName: 'sender',
+      namespace: 'default',
+      nats,
+    });
+
+    // null input
+    await expect(tool.execute(null)).rejects.toThrow();
+    // missing fields
+    await expect(tool.execute({})).rejects.toThrow();
+    // wrong types
+    await expect(tool.execute({ to: 123, message: true })).rejects.toThrow();
+    // undefined input
+    await expect(tool.execute(undefined)).rejects.toThrow();
+  });
 });
 
 describe('read_file tool', () => {
@@ -94,6 +111,23 @@ describe('read_file tool', () => {
     const tool = createReadFileTool({ cellName: 'test-cell', fs });
     await expect(tool.execute({ path: 'missing.txt' })).rejects.toThrow('ENOENT');
   });
+
+  it('throws on malformed input (I3)', async () => {
+    const tool = createReadFileTool({ cellName: 'test-cell', fs });
+
+    await expect(tool.execute(null)).rejects.toThrow();
+    await expect(tool.execute({})).rejects.toThrow();
+    await expect(tool.execute({ path: 123 })).rejects.toThrow();
+    await expect(tool.execute(undefined)).rejects.toThrow();
+  });
+
+  it('rejects path traversal attempts (I4)', async () => {
+    const tool = createReadFileTool({ cellName: 'test-cell', fs });
+
+    await expect(tool.execute({ path: '../../etc/passwd' })).rejects.toThrow('Path traversal');
+    await expect(tool.execute({ path: 'shared/../../etc/passwd' })).rejects.toThrow('Path traversal');
+    await expect(tool.execute({ path: 'private/../../../etc/passwd' })).rejects.toThrow('Path traversal');
+  });
 });
 
 describe('write_file tool', () => {
@@ -119,6 +153,23 @@ describe('write_file tool', () => {
     await tool.execute({ path: 'sub/dir/file.txt', content: 'nested' });
 
     expect(fs.createdDirs).toContain('/workspace/private/test-cell/sub/dir');
+  });
+
+  it('throws on malformed input (I3)', async () => {
+    const tool = createWriteFileTool({ cellName: 'test-cell', fs });
+
+    await expect(tool.execute(null)).rejects.toThrow();
+    await expect(tool.execute({})).rejects.toThrow();
+    await expect(tool.execute({ path: 'file.txt' })).rejects.toThrow(); // missing content
+    await expect(tool.execute({ path: 123, content: 'hello' })).rejects.toThrow();
+    await expect(tool.execute(undefined)).rejects.toThrow();
+  });
+
+  it('rejects path traversal attempts (I4)', async () => {
+    const tool = createWriteFileTool({ cellName: 'test-cell', fs });
+
+    await expect(tool.execute({ path: '../../etc/passwd', content: 'evil' })).rejects.toThrow('Path traversal');
+    await expect(tool.execute({ path: '../../../etc/shadow', content: 'evil' })).rejects.toThrow('Path traversal');
   });
 });
 
@@ -176,5 +227,15 @@ describe('bash tool', () => {
     const result = await tool.execute({ command: 'true' });
 
     expect(result).toBe('[no output]');
+  });
+
+  it('throws on malformed input (I3)', async () => {
+    const tool = createBashTool({ executor });
+
+    await expect(tool.execute(null)).rejects.toThrow();
+    await expect(tool.execute({})).rejects.toThrow();
+    await expect(tool.execute({ command: 123 })).rejects.toThrow();
+    await expect(tool.execute(undefined)).rejects.toThrow();
+    await expect(tool.execute({ command: '' })).rejects.toThrow();
   });
 });

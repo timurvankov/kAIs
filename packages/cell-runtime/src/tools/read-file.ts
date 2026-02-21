@@ -1,6 +1,10 @@
 /**
  * read_file tool — read a file from the workspace.
  */
+import { resolve } from 'node:path';
+
+import { z } from 'zod';
+
 import type { Tool } from './tool-executor.js';
 
 const MAX_FILE_LENGTH = 10000;
@@ -26,22 +30,30 @@ export function createReadFileTool(config: ReadFileConfig): Tool {
       required: ['path'],
     },
     async execute(input: unknown): Promise<string> {
-      const { path } = input as { path: string };
-
-      if (!path) {
-        throw new Error('"path" is required');
-      }
+      const ReadFileInput = z.object({
+        path: z.string().min(1, '"path" must be a non-empty string'),
+      });
+      const { path } = ReadFileInput.parse(input);
 
       // Resolve the path: if it starts with 'private/', use the cell's private area
       // Otherwise, treat as shared workspace
+      let baseDir: string;
       let resolvedPath: string;
       if (path.startsWith('private/')) {
-        resolvedPath = `/workspace/private/${config.cellName}/${path.slice('private/'.length)}`;
+        baseDir = `/workspace/private/${config.cellName}`;
+        resolvedPath = resolve(baseDir, path.slice('private/'.length));
       } else if (path.startsWith('shared/')) {
-        resolvedPath = `/workspace/shared/${path.slice('shared/'.length)}`;
+        baseDir = '/workspace/shared';
+        resolvedPath = resolve(baseDir, path.slice('shared/'.length));
       } else {
         // Default to shared workspace
-        resolvedPath = `/workspace/shared/${path}`;
+        baseDir = '/workspace/shared';
+        resolvedPath = resolve(baseDir, path);
+      }
+
+      // I4: Path traversal protection
+      if (!resolvedPath.startsWith(baseDir + '/') && resolvedPath !== baseDir) {
+        throw new Error('Path traversal not allowed: path must be within workspace');
       }
 
       const content = await config.fs.readFile(resolvedPath, 'utf-8');

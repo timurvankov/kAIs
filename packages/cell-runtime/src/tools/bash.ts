@@ -1,6 +1,8 @@
 /**
  * bash tool — execute a shell command.
  */
+import { z } from 'zod';
+
 import type { Tool } from './tool-executor.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -29,11 +31,11 @@ export function createBashTool(config: BashConfig): Tool {
       required: ['command'],
     },
     async execute(input: unknown): Promise<string> {
-      const { command, timeout } = input as { command: string; timeout?: number };
-
-      if (!command) {
-        throw new Error('"command" is required');
-      }
+      const BashInput = z.object({
+        command: z.string().min(1, '"command" must be a non-empty string'),
+        timeout: z.number().optional(),
+      });
+      const { command, timeout } = BashInput.parse(input);
 
       const timeoutMs = timeout ?? DEFAULT_TIMEOUT_MS;
 
