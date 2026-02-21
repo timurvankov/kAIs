@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kais-api
+description: kAIs API Server - REST/WebSocket API for Cell management
+version: 0.1.0
+appVersion: "0.0.1"
+type: application

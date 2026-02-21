@@ -1,2 +1,2 @@
-// @kais/cli — CLI tool (placeholder)
-export {};
+// @kais/cli — CLI tool
+export { createProgram } from './kais.js';

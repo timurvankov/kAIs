@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-kais-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: kais-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/part-of: kais
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kais-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kais-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/part-of: kais
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "{{ .Values.port }}"
+            - name: NATS_URL
+              value: {{ .Values.nats.url }}
+            - name: POSTGRES_URL
+              value: {{ .Values.postgres.url }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
