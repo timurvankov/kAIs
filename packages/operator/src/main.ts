@@ -463,6 +463,16 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
     async emitBlueprintEvent(blueprint: any, eventType: any, reason: string, message: string): Promise<void> {
       // Blueprint events — implement when Blueprint watching is added
     },
+
+    // --- KnowledgeGraphs ---
+
+    async updateKnowledgeGraphStatus() {},
+    async emitKnowledgeGraphEvent() {},
+    async listKnowledgeGraphs() { return []; },
+    async createKnowledgeGraphPod() {},
+    async createKnowledgeGraphService() {},
+    async deleteKnowledgeGraphPod() {},
+    async deleteKnowledgeGraphService() {},
   };
 }
 

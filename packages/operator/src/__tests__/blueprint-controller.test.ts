@@ -7,6 +7,13 @@ function makeMockKube() {
   return {
     updateBlueprintStatus: vi.fn(),
     emitBlueprintEvent: vi.fn(),
+    updateKnowledgeGraphStatus: vi.fn(),
+    emitKnowledgeGraphEvent: vi.fn(),
+    listKnowledgeGraphs: vi.fn().mockResolvedValue([]),
+    createKnowledgeGraphPod: vi.fn(),
+    createKnowledgeGraphService: vi.fn(),
+    deleteKnowledgeGraphPod: vi.fn(),
+    deleteKnowledgeGraphService: vi.fn(),
   };
 }
 

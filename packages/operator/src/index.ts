@@ -3,6 +3,7 @@ export { BlueprintController } from './blueprint-controller.js';
 export { CellController } from './controller.js';
 export { ExperimentController } from './experiment-controller.js';
 export { FormationController } from './formation-controller.js';
+export { KnowledgeGraphController } from './knowledgegraph-controller.js';
 export { MissionController } from './mission-controller.js';
 
 // Health server for K8s probes
@@ -39,6 +40,8 @@ export type {
   FileSystem,
   FormationResource,
   FormationEventType,
+  KnowledgeGraphEventType,
+  KnowledgeGraphResource,
   KubeClient,
   MissionEventType,
   MissionResource,
