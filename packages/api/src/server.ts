@@ -3,7 +3,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import { SpanKind, SpanStatusCode, context, propagation } from '@opentelemetry/api';
 
 import { createEnvelope, getTracer } from '@kais/core';
-import type { AuthUser, RbacResource, RbacVerb, SpawnRequestPhase } from '@kais/core';
+import type { AuditEntry, AuthUser, RbacResource, RbacVerb, SpawnRequestPhase } from '@kais/core';
 import type { DbClient, NatsClient } from './clients.js';
 import type { AuthProvider } from './auth.js';
 import { extractBearerToken } from './auth.js';
@@ -11,6 +11,7 @@ import type { RbacService } from './rbac.js';
 import type { BudgetLedgerService } from './budget-ledger.js';
 import type { CellTreeService } from './cell-tree.js';
 import type { SpawnRequestService } from './spawn-request.js';
+import type { AuditLogService, AuditQueryOptions } from './audit-log.js';
 
 const tracer = getTracer('kais-api');
 
@@ -58,6 +59,8 @@ export interface BuildServerOptions {
   cellTree?: CellTreeService;
   /** Spawn request service — if provided, spawn-request endpoints are enabled. */
   spawnRequests?: SpawnRequestService;
+  /** Audit log service — if provided, audit log endpoints + middleware are enabled. */
+  auditLog?: AuditLogService;
 }
 
 /**
@@ -65,7 +68,7 @@ export interface BuildServerOptions {
  * Does NOT call listen() — the caller is responsible for starting it.
  */
 export async function buildServer(opts: BuildServerOptions): Promise<FastifyInstance> {
-  const { nats, db, logger = true, auth, rbac, budgetLedger, cellTree, spawnRequests } = opts;
+  const { nats, db, logger = true, auth, rbac, budgetLedger, cellTree, spawnRequests, auditLog } = opts;
 
   const app = Fastify({ logger });
   await app.register(fastifyWebsocket);
@@ -491,6 +494,73 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
       } catch (err) {
         return reply.status(400).send({ error: (err as Error).message });
       }
+    });
+  }
+
+  // ========== Phase 8: Audit Log ==========
+
+  if (auditLog) {
+    // Audit log middleware — record all API mutations
+    app.addHook('onResponse', async (req, reply) => {
+      // Only audit mutating operations on API routes
+      if (!req.url.startsWith('/api/v1/')) return;
+      if (req.method === 'GET' && !req.url.includes('/exec')) return;
+
+      const user = (req as FastifyRequest & { user?: AuthUser }).user;
+      const resource = extractResource(req.url);
+      if (!resource) return;
+
+      const verb = httpMethodToVerb(req.method);
+      const namespace = (req.query as Record<string, string | undefined>).namespace ?? 'default';
+
+      try {
+        await auditLog.record({
+          actor: user?.name ?? 'anonymous',
+          action: verb as AuditEntry['action'],
+          resourceType: resource,
+          resourceId: (req.params as Record<string, string>)?.name
+            ?? (req.params as Record<string, string>)?.cellId
+            ?? (req.params as Record<string, string>)?.id
+            ?? undefined,
+          namespace,
+          outcome: reply.statusCode < 400 ? 'success' : 'failure',
+          statusCode: reply.statusCode,
+        });
+      } catch {
+        // Audit log failures must not break API
+      }
+    });
+
+    // ---------- GET /api/v1/audit-log ----------
+    app.get<{
+      Querystring: {
+        actor?: string;
+        action?: string;
+        resourceType?: string;
+        namespace?: string;
+        outcome?: string;
+        since?: string;
+        until?: string;
+        limit?: string;
+        offset?: string;
+      };
+    }>('/api/v1/audit-log', async (req) => {
+      const queryOpts: AuditQueryOptions = {};
+      if (req.query.actor) queryOpts.actor = req.query.actor;
+      if (req.query.action) queryOpts.action = req.query.action as AuditQueryOptions['action'];
+      if (req.query.resourceType) queryOpts.resourceType = req.query.resourceType;
+      if (req.query.namespace) queryOpts.namespace = req.query.namespace;
+      if (req.query.outcome) queryOpts.outcome = req.query.outcome as 'success' | 'failure';
+      if (req.query.since) queryOpts.since = req.query.since;
+      if (req.query.until) queryOpts.until = req.query.until;
+      queryOpts.limit = Math.min(Math.max(parseInt(req.query.limit ?? '100', 10) || 100, 1), 1000);
+      queryOpts.offset = Math.max(parseInt(req.query.offset ?? '0', 10) || 0, 0);
+
+      const [entries, total] = await Promise.all([
+        auditLog.query(queryOpts),
+        auditLog.count(queryOpts),
+      ]);
+      return { entries, total };
     });
   }
 

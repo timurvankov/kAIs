@@ -717,17 +717,17 @@ DELIVERABLE: Visual dashboard, ClickHouse analytics, multi-node support
 
 ```
 STREAM A (Recursive Ecosystems):
-  A1 [orch]    Cell CRD recursion fields (maxDepth, maxDescendants, spawnPolicy)
-  A2 [orch]    Recursion safety in operator (depth check, descendant count, platform limit)
-  A3 [orch]    Budget ledger system
+  A1 [orch]    ✅ Cell CRD recursion fields (maxDepth, maxDescendants, spawnPolicy)
+  A2 [orch]    ✅ Recursion safety in operator (depth check, descendant count, platform limit)
+  A3 [orch]    ✅ Budget ledger system
                 - Postgres tables (budget_ledger, budget_balances)
                 - BudgetLedger service (allocate, spend, reclaim, getTree)
                 - Cascading pause on exhaustion
-  A4 [orch]    Cell tree tracking (cell_tree table, materialized path)
-  A5 [runtime] spawn_cell tool v2 (canSpawnChildren, blueprintRef, maxDepth)
+  A4 [orch]    ✅ Cell tree tracking (cell_tree table, materialized path)
+  A5 [runtime] ✅ spawn_cell tool v2 (canSpawnChildren, blueprintRef, maxDepth)
 
 STREAM B (Spawn Approval + RBAC):
-  B1 [orch]    SpawnRequest CRD + controller
+  B1 [orch]    ✅ SpawnRequest CRD + controller
   B2 [orch]    ✅ RBAC system (Role CRD, user_role_bindings)
   B3 [api]     ✅ RBAC middleware in API server
   B4 [api]     ✅ Auth system (token-based + OIDC option)
@@ -736,11 +736,12 @@ STREAM C (MCP Gateway + Security):
   C1 [service] ✅ MCP Gateway server (packages/mcp-gateway)
                 - MCP Streamable HTTP transport
                 - Tools: kais_launch_team, kais_mission_status, kais_recall, etc.
-  C2 [orch]    NATS authorization (per-Cell credentials)
+  C2 [orch]    ✅ NATS authorization (per-Cell credentials)
                 - Generate credentials on Cell creation
                 - Restrict pub/sub subjects based on topology
-  C3 [orch]    Audit log (append-only NATS stream → Postgres/ClickHouse)
-  C4 [orch]    Cross-level knowledge scoping (tree-based visibility)
+                - Subject matching with wildcards (* and >)
+  C3 [orch]    ✅ Audit log (append-only Postgres, API middleware + query endpoint)
+  C4 [orch]    Cross-level knowledge scoping (tree-based visibility) — depends on Phase 4
 
 STREAM D (CLI + Dashboard):
   D1 [cli]     Tree commands (tree, budget show/tree/top-up/history)
@@ -752,14 +753,15 @@ STREAM D (CLI + Dashboard):
   D7 [dash]    RBAC management page
 
 TESTS:
-  T1 [test]    Unit: Recursion safety validation
-  T2 [test]    Unit: Budget ledger operations, tree balance
+  T1 [test]    ✅ Unit: Recursion safety validation (15 tests)
+  T2 [test]    ✅ Unit: Budget ledger operations, tree balance (18 + 15 tests)
   T3 [test]    ✅ Unit: RBAC role matching, namespace scoping (15 tests)
   T4 [test]    Integration: 3-level recursive spawn with budget cascade
   T5 [test]    ✅ Integration: RBAC enforcement (authorized/unauthorized) (8 tests)
   T6 [test]    ✅ Integration: MCP Gateway → launch team → results (16 tests)
-  T7 [test]    Integration: NATS auth prevents topology bypass
-  T8 [test]    E2E: Recursive ecosystem builds SaaS app
+  T7 [test]    ✅ Unit: NATS auth credential management + subject matching (25 tests)
+  T8 [test]    ✅ Unit: Audit log record/query/count/filter (12 tests)
+  T9 [test]    E2E: Recursive ecosystem builds SaaS app
 
 DELIVERABLE: Recursive spawning, budget tree, RBAC, MCP integration
 ```
@@ -1153,19 +1155,19 @@ examples/
 - (done) `spawn-policy-approval.yaml` — Cell with spawnPolicy: approval_required
 
 **Integration tests:**
-- Recursion safety: maxDepth enforced (depth 3 → depth 4 rejected)
-- Recursion safety: maxDescendants enforced
-- Budget ledger: allocate → spend → balance correct
-- Budget cascade: parent exhausted → children paused
-- Budget reclaim: child deleted → budget returned to parent
-- SpawnRequest workflow: request → approve → Cell created
-- SpawnRequest workflow: request → reject → no Cell
+- (done) Recursion safety: maxDepth enforced (depth 3 → depth 4 rejected)
+- (done) Recursion safety: maxDescendants enforced
+- (done) Budget ledger: allocate → spend → balance correct
+- (done) Budget cascade: parent exhausted → spend rejected
+- (done) Budget reclaim: child deleted → budget returned to parent
+- (done) SpawnRequest workflow: request → approve → Cell created
+- (done) SpawnRequest workflow: request → reject → no Cell
 - (done) RBAC role matching: admin can create, viewer cannot
 - (done) RBAC namespace scoping: role applies only in scope
 - (done) MCP Gateway: tool discovery → kais_launch_team → results
-- NATS auth: Cell can only pub/sub its own subjects
-- NATS auth: topology bypass attempt → rejected
-- Audit log: all operations recorded
+- (done) NATS auth: Cell can only pub/sub its own subjects
+- (done) NATS auth: topology bypass attempt → rejected
+- (done) Audit log: all operations recorded, filtered by actor/action/resource
 
 **E2E tests:**
 - `recursive-spawn.test.ts`:
