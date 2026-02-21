@@ -59,7 +59,7 @@ export function createSpawnCellTool(config: SpawnCellConfig): Tool {
         name: z.string().min(1, '"name" must be a non-empty string'),
         systemPrompt: z.string().min(1, '"systemPrompt" must be a non-empty string'),
         model: z.string().optional(),
-        provider: z.string().optional(),
+        provider: z.enum(['anthropic', 'openai', 'ollama']).optional(),
         tools: z.array(z.string()).optional(),
         budget: z.number().positive().optional(),
       });
@@ -73,19 +73,19 @@ export function createSpawnCellTool(config: SpawnCellConfig): Tool {
       const childBudget = parsed.budget ?? remaining * 0.1;
 
       // 3. Validate budget
+      if (childBudget <= 0) {
+        throw new Error('Child budget must be greater than zero');
+      }
       if (childBudget > remaining) {
         throw new Error(
           `Insufficient budget: requested $${childBudget.toFixed(4)} but only $${remaining.toFixed(4)} remaining`,
         );
       }
 
-      // 4. Deduct budget from parent
-      config.deductBudget(childBudget);
-
-      // 5. Build child CellSpec
+      // 4. Build child CellSpec
       const childSpec: CellSpec = {
         mind: {
-          provider: (parsed.provider ?? config.parentSpec.mind.provider) as CellSpec['mind']['provider'],
+          provider: parsed.provider ?? config.parentSpec.mind.provider,
           model: parsed.model ?? config.parentSpec.mind.model,
           systemPrompt: parsed.systemPrompt,
         },
@@ -98,14 +98,14 @@ export function createSpawnCellTool(config: SpawnCellConfig): Tool {
 
       // 6. Create Cell CRD with ownerReferences
       const cellResource: CellResourceLite = {
-        apiVersion: 'kais.dev/v1alpha1',
+        apiVersion: 'kais.io/v1',
         kind: 'Cell',
         metadata: {
           name: childName,
           namespace: config.parentNamespace,
           ownerReferences: [
             {
-              apiVersion: 'kais.dev/v1alpha1',
+              apiVersion: 'kais.io/v1',
               kind: 'Cell',
               name: config.parentCellName,
               uid: config.parentUid,
@@ -119,7 +119,10 @@ export function createSpawnCellTool(config: SpawnCellConfig): Tool {
 
       await config.kubeClient.createCell(cellResource);
 
-      // 7. Return result
+      // 7. Deduct budget from parent (only after successful creation)
+      config.deductBudget(childBudget);
+
+      // 8. Return result
       return JSON.stringify({
         status: 'spawned',
         name: childName,

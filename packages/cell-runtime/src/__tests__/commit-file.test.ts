@@ -25,7 +25,7 @@ class MockCommitFs implements CommitFileFs {
     this.writtenFiles.push({ path, content });
   }
 
-  async mkdir(path: string): Promise<void> {
+  async mkdir(path: string, _options?: { recursive: boolean }): Promise<void> {
     this.createdDirs.push(path);
   }
 }

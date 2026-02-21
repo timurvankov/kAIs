@@ -43,10 +43,10 @@ export async function createTopologyEnforcer(
   try {
     const reader = fs ?? { readFile: defaultReadFile };
     const content = await reader.readFile(filePath);
-    const routeTable = JSON.parse(content) as Record<string, string[]>;
+    const routeTable = JSON.parse(content) as Record<string, unknown>;
     const targets = routeTable[cellName];
-    if (targets !== undefined) {
-      allowedTargets = targets;
+    if (targets !== undefined && Array.isArray(targets)) {
+      allowedTargets = targets as string[];
     }
     // If cellName is not in the route table, no targets are allowed.
     // (A cell listed in the file but with no entry has no outbound routes.)

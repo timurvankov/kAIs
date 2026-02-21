@@ -10,7 +10,7 @@ import type { Tool } from './tool-executor.js';
 export interface CommitFileFs {
   readFile(path: string): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
-  mkdir(path: string): Promise<void>;
+  mkdir(path: string, options?: { recursive: boolean }): Promise<void>;
 }
 
 export interface CommitFileConfig {
@@ -59,7 +59,7 @@ export function createCommitFileTool(config: CommitFileConfig): Tool {
 
       // 5. Create destination directory if needed
       const destDir = dirname(destPath);
-      await config.fs.mkdir(destDir);
+      await config.fs.mkdir(destDir, { recursive: true });
 
       // 6. Write to shared workspace
       await config.fs.writeFile(destPath, content);

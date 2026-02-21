@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { CellSpec } from '@kais/core';
 
@@ -60,7 +60,7 @@ describe('spawn_cell tool', () => {
     // Verify CRD was created
     expect(config.kubeClient.createdCells).toHaveLength(1);
     const cell = config.kubeClient.createdCells[0]!;
-    expect(cell.apiVersion).toBe('kais.dev/v1alpha1');
+    expect(cell.apiVersion).toBe('kais.io/v1');
     expect(cell.kind).toBe('Cell');
     expect(cell.metadata.name).toBe('parent-cell-worker');
     expect(cell.metadata.namespace).toBe('default');
@@ -89,7 +89,7 @@ describe('spawn_cell tool', () => {
     expect(cell.metadata.ownerReferences).toHaveLength(1);
 
     const ownerRef = cell.metadata.ownerReferences[0]!;
-    expect(ownerRef.apiVersion).toBe('kais.dev/v1alpha1');
+    expect(ownerRef.apiVersion).toBe('kais.io/v1');
     expect(ownerRef.kind).toBe('Cell');
     expect(ownerRef.name).toBe('parent-cell');
     expect(ownerRef.uid).toBe('uid-1234-5678');
@@ -218,6 +218,27 @@ describe('spawn_cell tool', () => {
 
     const cell = config.kubeClient.createdCells[0]!;
     expect(cell.spec.parentRef).toBe('parent-cell');
+  });
+
+  it('does not deduct budget when createCell throws', async () => {
+    let deducted = 0;
+    const failingKubeClient: KubeClientLite = {
+      async createCell(): Promise<void> {
+        throw new Error('K8s API unavailable');
+      },
+    };
+    const config = makeConfig({
+      kubeClient: failingKubeClient,
+      remainingBudget: () => 10.0,
+      deductBudget: (amount: number) => { deducted += amount; },
+    });
+    const tool = createSpawnCellTool(config);
+
+    await expect(
+      tool.execute({ name: 'child', systemPrompt: 'You work.', budget: 3.0 }),
+    ).rejects.toThrow('K8s API unavailable');
+
+    expect(deducted).toBe(0);
   });
 
   it('throws on malformed input', async () => {
