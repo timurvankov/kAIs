@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kais-knowledge
+  namespace: kais-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kais-knowledge
+  template:
+    metadata:
+      labels:
+        app: kais-knowledge
+    spec:
+      containers:
+        - name: knowledge
+          image: kais-knowledge:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: NEO4J_URL
+              value: bolt://neo4j.kais-system:7687
+            - name: NEO4J_USER
+              value: neo4j
+            - name: NEO4J_PASSWORD
+              value: kais
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 250m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kais-knowledge
+  namespace: kais-system
+spec:
+  selector:
+    app: kais-knowledge
+  ports:
+    - port: 8000
+      targetPort: 8000

@@ -108,6 +108,10 @@ export function buildCellPod(cell: CellResource): k8s.V1Pod {
               name: 'OTEL_EXPORTER_OTLP_ENDPOINT',
               value: 'http://otel-collector-opentelemetry-collector.kais-system:4317',
             },
+            {
+              name: 'KNOWLEDGE_SERVICE_URL',
+              value: 'http://kais-knowledge.kais-system:8000',
+            },
           ],
           envFrom: [{ secretRef: { name: 'llm-credentials', optional: true } }],
           resources: {

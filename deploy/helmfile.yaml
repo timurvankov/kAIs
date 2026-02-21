@@ -11,6 +11,8 @@ repositories:
     url: https://prometheus-community.github.io/helm-charts
   - name: grafana
     url: https://grafana.github.io/helm-charts
+  - name: neo4j
+    url: https://helm.neo4j.com/neo4j
 
 releases:
   - name: postgres
@@ -195,3 +197,22 @@ releases:
                   path: /var/lib/grafana/dashboards/kais
         dashboardsConfigMaps:
           kais: kais-grafana-dashboards
+
+  # Neo4j for knowledge graph (Phase 4)
+  - name: neo4j
+    namespace: kais-system
+    chart: neo4j/neo4j-standalone
+    version: 5.26.0
+    condition: knowledge.enabled
+    values:
+      - neo4j:
+          password: kais
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 500m
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          volume:
+            size: 10Gi
