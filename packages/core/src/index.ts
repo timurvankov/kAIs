@@ -49,6 +49,26 @@ export {
   TopologySpecSchema,
   TopologyTypeSchema,
   WorkingMemorySchema,
+  // Knowledge schemas
+  KnowledgeScopeLevelSchema,
+  KnowledgeScopeSchema,
+  FactSourceTypeSchema,
+  FactSourceSchema,
+  FactSchema,
+  SearchOptionsSchema,
+  // KnowledgeGraph schemas
+  KnowledgeGraphPhaseSchema,
+  KnowledgeGraphRetentionSchema,
+  KnowledgeGraphResourcesSchema,
+  KnowledgeGraphSpecSchema,
+  KnowledgeGraphStatusSchema,
+  // Blueprint schemas
+  BlueprintParameterTypeSchema,
+  BlueprintParameterSchema,
+  BlueprintEvidenceSchema,
+  BlueprintSpecSchema,
+  BlueprintVersionSchema,
+  BlueprintStatusSchema,
 } from './schemas.js';
 
 // TypeScript types (inferred from Zod)
@@ -102,6 +122,26 @@ export type {
   TopologySpec,
   TopologyType,
   WorkingMemory,
+  // Knowledge types
+  KnowledgeScopeLevel,
+  KnowledgeScope,
+  FactSourceType,
+  FactSource,
+  Fact,
+  SearchOptions,
+  // KnowledgeGraph types
+  KnowledgeGraphPhase,
+  KnowledgeGraphRetention,
+  KnowledgeGraphResources,
+  KnowledgeGraphSpec,
+  KnowledgeGraphStatus,
+  // Blueprint types
+  BlueprintParameterType,
+  BlueprintParameter,
+  BlueprintEvidence,
+  BlueprintSpec,
+  BlueprintVersion,
+  BlueprintStatus,
 } from './types.js';
 
 // Error model
@@ -148,6 +188,10 @@ export type {
   MessageHandler,
   Subscription,
 } from './runtime.js';
+
+// Knowledge store
+export { InMemoryKnowledgeStore } from './knowledge.js';
+export type { KnowledgeStore, ScopedKnowledgeStore, AddFactInput } from './knowledge.js';
 
 // Protocol system
 export {

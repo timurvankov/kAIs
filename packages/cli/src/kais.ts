@@ -487,5 +487,160 @@ export function createProgram(): Command {
       }
     });
 
+  // ----- Knowledge commands -----
+
+  const knowledge = program
+    .command('knowledge')
+    .description('Manage the knowledge graph')
+    .addCommand(
+      new Command('search')
+        .argument('<query>', 'Search query')
+        .option('--scope <scope>', 'Scope: platform|realm|formation|cell', 'platform')
+        .option('--namespace <ns>', 'Namespace for realm scope', 'default')
+        .option('-n, --max-results <n>', 'Max results', '10')
+        .option('--api-url <url>', 'API server URL')
+        .action(async (query: string, opts: { scope: string; namespace: string; maxResults: string; apiUrl?: string }) => {
+          const apiUrl = getApiUrl(opts);
+          const res = await fetch(
+            `${apiUrl}/api/v1/knowledge/search`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                query,
+                scope: { level: opts.scope, realm_id: opts.namespace },
+                max_results: parseInt(opts.maxResults, 10),
+              }),
+            },
+          );
+          if (!res.ok) {
+            const text = await res.text();
+            console.error(`Error: ${res.status} ${text}`);
+            process.exitCode = 1;
+            return;
+          }
+          const facts = await res.json() as Array<{ id: string; confidence: number; content: string; tags: string[] }>;
+          for (const f of facts) {
+            console.log(`  [${f.id.slice(0, 8)}] (${f.confidence}) ${f.content}`);
+            if (f.tags.length) console.log(`         tags: ${f.tags.join(', ')}`);
+          }
+        }),
+    )
+    .addCommand(
+      new Command('add')
+        .argument('<fact>', 'Fact to add')
+        .option('--scope <scope>', 'Scope', 'platform')
+        .option('--confidence <n>', 'Confidence 0-1', '0.9')
+        .option('--tags <tags>', 'Comma-separated tags', '')
+        .option('--api-url <url>', 'API server URL')
+        .action(async (fact: string, opts: { scope: string; confidence: string; tags: string; apiUrl?: string }) => {
+          const apiUrl = getApiUrl(opts);
+          const res = await fetch(
+            `${apiUrl}/api/v1/knowledge/add`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                content: fact,
+                scope: { level: opts.scope },
+                source: { type: 'user_input' },
+                confidence: parseFloat(opts.confidence),
+                tags: opts.tags ? opts.tags.split(',') : [],
+              }),
+            },
+          );
+          if (!res.ok) {
+            const text = await res.text();
+            console.error(`Error: ${res.status} ${text}`);
+            process.exitCode = 1;
+            return;
+          }
+          const data = await res.json() as { factId: string };
+          console.log(`Fact added: ${data.factId}`);
+        }),
+    );
+
+  // ----- KnowledgeGraph commands -----
+
+  knowledge
+    .addCommand(
+      new Command('graphs')
+        .description('Manage KnowledgeGraph resources')
+        .addCommand(
+          new Command('list')
+            .action(() => {
+              const result = execFileSync('kubectl', ['get', 'knowledgegraphs', '-o', 'wide'], { encoding: 'utf-8' });
+              console.log(result);
+            }),
+        )
+        .addCommand(
+          new Command('describe')
+            .argument('<name>', 'KnowledgeGraph name')
+            .action((name: string) => {
+              const result = execFileSync('kubectl', ['describe', 'knowledgegraph', name], { encoding: 'utf-8' });
+              console.log(result);
+            }),
+        ),
+    );
+
+  // ----- Blueprint commands -----
+
+  program
+    .command('blueprint')
+    .description('Manage reusable team blueprints')
+    .addCommand(
+      new Command('list')
+        .action(() => {
+          const result = execFileSync('kubectl', ['get', 'blueprints', '-o', 'wide'], { encoding: 'utf-8' });
+          console.log(result);
+        }),
+    )
+    .addCommand(
+      new Command('describe')
+        .argument('<name>', 'Blueprint name')
+        .action((name: string) => {
+          const result = execFileSync('kubectl', ['describe', 'blueprint', name], { encoding: 'utf-8' });
+          console.log(result);
+        }),
+    )
+    .addCommand(
+      new Command('use')
+        .argument('<name>', 'Blueprint name')
+        .option('--namespace <ns>', 'Target namespace', 'default')
+        .option('--set <params...>', 'Parameter overrides (key=value)')
+        .option('--mission <objective>', 'Mission objective')
+        .option('--api-url <url>', 'API server URL')
+        .action(async (name: string, opts: { namespace: string; set?: string[]; mission?: string; apiUrl?: string }) => {
+          const apiUrl = getApiUrl(opts);
+          const params: Record<string, string> = {};
+          for (const p of opts.set ?? []) {
+            const [k, v] = p.split('=');
+            if (k && v) params[k] = v;
+          }
+
+          const res = await fetch(
+            `${apiUrl}/api/v1/blueprints/${encodeURIComponent(name)}/instantiate`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                namespace: opts.namespace,
+                parameters: params,
+                mission: opts.mission,
+              }),
+            },
+          );
+          if (!res.ok) {
+            const text = await res.text();
+            console.error(`Error: ${res.status} ${text}`);
+            process.exitCode = 1;
+            return;
+          }
+          const data = await res.json() as { formationName: string; missionName?: string };
+          console.log(`Formation: ${data.formationName}`);
+          if (data.missionName) console.log(`Mission: ${data.missionName}`);
+        }),
+    );
+
   return program;
 }

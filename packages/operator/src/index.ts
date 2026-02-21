@@ -1,7 +1,9 @@
 // Controllers
+export { BlueprintController } from './blueprint-controller.js';
 export { CellController } from './controller.js';
 export { ExperimentController } from './experiment-controller.js';
 export { FormationController } from './formation-controller.js';
+export { KnowledgeGraphController } from './knowledgegraph-controller.js';
 export { MissionController } from './mission-controller.js';
 
 // Health server for K8s probes
@@ -28,6 +30,8 @@ export { parseTimeout } from './timeout.js';
 
 // Types
 export type {
+  BlueprintEventType,
+  BlueprintResource,
   CellResource,
   CellEventType,
   CommandExecutor,
@@ -36,6 +40,8 @@ export type {
   FileSystem,
   FormationResource,
   FormationEventType,
+  KnowledgeGraphEventType,
+  KnowledgeGraphResource,
   KubeClient,
   MissionEventType,
   MissionResource,

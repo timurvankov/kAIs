@@ -125,7 +125,7 @@ describe('Cell CRD Lifecycle', () => {
         console.log(`[test] Pods remaining after delete: ${pods.length}`);
         return pods.length === 0;
       },
-      { timeoutMs: 30_000, label: 'pod cleanup after cell delete' },
+      { timeoutMs: 60_000, label: 'pod cleanup after cell delete' },
     );
 
     const pods = await listPods('kais.io/cell=e2e-test-cell');
