@@ -5,6 +5,8 @@
  * and starts watching CRDs.
  */
 import * as k8s from '@kubernetes/client-node';
+import { connect as natsConnect } from 'nats';
+import { createEnvelope } from '@kais/core';
 
 import { CellController } from './controller.js';
 import { FormationController } from './formation-controller.js';
@@ -331,14 +333,27 @@ function createKubeClient(kc: k8s.KubeConfig): KubeClient {
 }
 
 // ---------------------------------------------------------------------------
-// Stub NatsClient — operator doesn't need real NATS for Cell/Formation work.
-// MissionController will use it for sending objectives if enabled.
+// Real NatsClient — connects to NATS and sends envelopes to cell inboxes.
 // ---------------------------------------------------------------------------
 
-function createNatsStub(): NatsClient {
+const NATS_URL = process.env['NATS_URL'] ?? 'nats://kais-nats:4222';
+
+async function createNatsClient(): Promise<NatsClient> {
+  const nc = await natsConnect({ servers: NATS_URL });
+  console.log(`[kais-operator] Connected to NATS at ${NATS_URL}`);
+
   return {
     async sendMessageToCell(cellName, namespace, message) {
-      console.log(`[NATS stub] Would send to cell.${namespace}.${cellName}.inbox: ${message.slice(0, 100)}`);
+      const subject = `cell.${namespace}.${cellName}.inbox`;
+      const envelope = createEnvelope({
+        from: 'mission-controller',
+        to: `cell.${namespace}.${cellName}`,
+        type: 'message',
+        payload: { content: message },
+      });
+      const data = new TextEncoder().encode(JSON.stringify(envelope));
+      nc.publish(subject, data);
+      console.log(`[NATS] Published to ${subject}: ${message.slice(0, 100)}`);
     },
   };
 }
@@ -395,7 +410,7 @@ async function main(): Promise<void> {
   kc.loadFromCluster();
 
   const kubeClient = createKubeClient(kc);
-  const natsClient = createNatsStub();
+  const natsClient = await createNatsClient();
   const executor = createCommandExecutor();
   const fs = createFileSystem();
 
