@@ -11,7 +11,6 @@ import type { RbacService } from './rbac.js';
 import type { BudgetLedgerService } from './budget-ledger.js';
 import type { CellTreeService } from './cell-tree.js';
 import type { SpawnRequestService } from './spawn-request.js';
-import type { NatsAuthService } from './nats-auth.js';
 import type { AuditLogService, AuditQueryOptions } from './audit-log.js';
 
 const tracer = getTracer('kais-api');
@@ -60,8 +59,6 @@ export interface BuildServerOptions {
   cellTree?: CellTreeService;
   /** Spawn request service — if provided, spawn-request endpoints are enabled. */
   spawnRequests?: SpawnRequestService;
-  /** NATS auth service — if provided, credential management endpoints are enabled. */
-  natsAuth?: NatsAuthService;
   /** Audit log service — if provided, audit log endpoints + middleware are enabled. */
   auditLog?: AuditLogService;
 }
@@ -71,7 +68,7 @@ export interface BuildServerOptions {
  * Does NOT call listen() — the caller is responsible for starting it.
  */
 export async function buildServer(opts: BuildServerOptions): Promise<FastifyInstance> {
-  const { nats, db, logger = true, auth, rbac, budgetLedger, cellTree, spawnRequests, natsAuth, auditLog } = opts;
+  const { nats, db, logger = true, auth, rbac, budgetLedger, cellTree, spawnRequests, auditLog } = opts;
 
   const app = Fastify({ logger });
   await app.register(fastifyWebsocket);
@@ -564,79 +561,6 @@ export async function buildServer(opts: BuildServerOptions): Promise<FastifyInst
         auditLog.count(queryOpts),
       ]);
       return { entries, total };
-    });
-  }
-
-  // ========== Phase 8: NATS Auth ==========
-
-  if (natsAuth) {
-    // ---------- GET /api/v1/nats-auth/:cellId ----------
-    app.get<{
-      Params: { cellId: string };
-    }>('/api/v1/nats-auth/:cellId', async (req, reply) => {
-      const { cellId } = req.params;
-      if (!cellId || !validateIdentifier(cellId)) {
-        return reply.status(400).send({ error: 'Invalid cell ID' });
-      }
-      const creds = await natsAuth.getCredentials(cellId);
-      if (!creds) {
-        return reply.status(404).send({ error: 'No active credentials' });
-      }
-      // Return permissions only (not the password) for security
-      return {
-        cellId: creds.cellId,
-        namespace: creds.namespace,
-        username: creds.username,
-        permissions: creds.permissions,
-        createdAt: creds.createdAt,
-      };
-    });
-
-    // ---------- POST /api/v1/nats-auth/:cellId/generate ----------
-    app.post<{
-      Params: { cellId: string };
-      Body: { namespace?: string; topologyRoutes?: string[] };
-    }>('/api/v1/nats-auth/:cellId/generate', async (req, reply) => {
-      const { cellId } = req.params;
-      if (!cellId || !validateIdentifier(cellId)) {
-        return reply.status(400).send({ error: 'Invalid cell ID' });
-      }
-      const body = req.body as { namespace?: string; topologyRoutes?: string[] } | undefined;
-      const namespace = body?.namespace ?? 'default';
-      const creds = await natsAuth.generateCredentials(cellId, namespace, body?.topologyRoutes);
-      return creds;
-    });
-
-    // ---------- POST /api/v1/nats-auth/:cellId/revoke ----------
-    app.post<{
-      Params: { cellId: string };
-    }>('/api/v1/nats-auth/:cellId/revoke', async (req, reply) => {
-      const { cellId } = req.params;
-      if (!cellId || !validateIdentifier(cellId)) {
-        return reply.status(400).send({ error: 'Invalid cell ID' });
-      }
-      await natsAuth.revokeCredentials(cellId);
-      return { ok: true };
-    });
-
-    // ---------- POST /api/v1/nats-auth/:cellId/validate ----------
-    app.post<{
-      Params: { cellId: string };
-      Body: { subject: string; operation: 'publish' | 'subscribe' };
-    }>('/api/v1/nats-auth/:cellId/validate', async (req, reply) => {
-      const { cellId } = req.params;
-      if (!cellId || !validateIdentifier(cellId)) {
-        return reply.status(400).send({ error: 'Invalid cell ID' });
-      }
-      const body = req.body as { subject?: string; operation?: string } | undefined;
-      if (!body?.subject || !body?.operation) {
-        return reply.status(400).send({ error: 'subject and operation required' });
-      }
-      if (body.operation !== 'publish' && body.operation !== 'subscribe') {
-        return reply.status(400).send({ error: 'operation must be publish or subscribe' });
-      }
-      const allowed = await natsAuth.validateAccess(cellId, body.subject, body.operation);
-      return { allowed };
     });
   }
 
